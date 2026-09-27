@@ -3,23 +3,23 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fighter — SF style demo</title>
+<title>Fighter — T-pose demo</title>
 <style>
   * { box-sizing: border-box; }
-  body { font-family: system-ui, sans-serif; background: #0b0b10; color: #eee;
+  body { font-family: system-ui, sans-serif; background: #141414; color: #eee;
          margin: 0; display: flex; height: 100vh; }
   #view { flex: 1; position: relative; min-width: 0; }
   #view canvas { display: block; width: 100%; height: 100%; }
-  #side { width: 300px; background: #14141a; padding: 16px; overflow-y: auto;
-          border-left: 1px solid #2a2a33; }
+  #side { width: 300px; background: #1d1d1d; padding: 16px; overflow-y: auto;
+          border-left: 1px solid #333; }
   #side h1 { font-size: 1.1em; margin: 0 0 4px; }
   #side p { font-size: 0.85em; color: #aaa; }
   #limbs { columns: 2; font-size: 0.8em; list-style: none; padding: 0; }
   #limbs li { padding: 2px 0; color: #ccc; }
   #limbs li::before { content: "▸ "; color: #ff5252; }
   .row { margin: 12px 0; }
-  button { background: #2a2a33; color: #eee; border: 1px solid #444;
-           padding: 6px 10px; margin: 0 6px 6px 0; cursor: pointer;
+  button { background: #333; color: #eee; border: 1px solid #555;
+           padding: 6px 10px; margin-right: 6px; cursor: pointer;
            border-radius: 4px; }
   button.on { background: #ff5252; border-color: #ff5252; color: #fff; }
   #err { position: absolute; top: 12px; left: 12px; right: 12px; background: #5a1111;
@@ -37,12 +37,10 @@
 <body>
 <div id="view"><div id="err"></div></div>
 <div id="side">
-  <h1>🥊 Fighter — SF style</h1>
+  <h1>🥊 Fighter — T-pose</h1>
   <p>Stylized from weigh-in photo. Red Muay Thai shorts, hand wraps,
-     bleached crop, gold chain. Ink outlines + baked shading, guard stance
-     by default — flip to T-pose to inspect the rig.</p>
+     bleached crop, gold chain. Faces +Y, up +Z, arms along ±X.</p>
   <div class="row">
-    <button id="stance" class="on">guard stance</button>
     <button id="rot" class="on">auto-rotate</button>
     <button id="wire">wireframe</button>
     <button id="bones">skeleton</button>
@@ -56,52 +54,27 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 const err = (m) => { const e = document.getElementById('err');
   e.style.display = 'block'; e.textContent = m; };
 const view = document.getElementById('view');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.15;
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 view.appendChild(renderer.domElement);
-
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0b0b10);
-const pmrem = new THREE.PMREMGenerator(renderer);
-scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-
+scene.background = new THREE.Color(0x232329);
 const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 100);
-camera.position.set(2.0, 2.7, 1.55);
+camera.position.set(2.4, -2.8, 1.7);
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 0.05, 1.0);
-controls.autoRotate = true;
-controls.autoRotateSpeed = 1.2;
+controls.target.set(0, 0, 1.0);
 controls.update();
-
-// warm frontal key w/ shadows, cool rear rim (model is Z-up here)
-const key = new THREE.DirectionalLight(0xfff0dd, 2.4);
-key.position.set(2.5, 3.5, 4.0);
-key.castShadow = true;
-key.shadow.mapSize.set(2048, 2048);
-key.shadow.camera.left = -2.5; key.shadow.camera.right = 2.5;
-key.shadow.camera.top = 2.5; key.shadow.camera.bottom = -2.5;
-key.shadow.camera.far = 20;
-scene.add(key);
-const rim = new THREE.DirectionalLight(0x88aaff, 1.8);
-rim.position.set(-2.5, -3.0, 2.5);
-scene.add(rim);
-scene.add(new THREE.HemisphereLight(0x8888aa, 0x111111, 0.35));
-
-// stage: dark disc catching a soft shadow
-const ground = new THREE.Mesh(
-  new THREE.CircleGeometry(2.6, 48),
-  new THREE.MeshStandardMaterial({ color: 0x17171d, roughness: 0.95 }));
-ground.receiveShadow = true;
-scene.add(ground);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x555566, 1.8));
+const key = new THREE.DirectionalLight(0xffffff, 3.0);
+key.position.set(3, -2, 5); scene.add(key);
+const rim = new THREE.DirectionalLight(0xff9999, 1.2);
+rim.position.set(-3, 2, 2); scene.add(rim);
+const grid = new THREE.GridHelper(4, 20, 0x777788, 0x3a3a44);
+grid.rotation.x = Math.PI / 2; scene.add(grid);
 
 function resize() {
   const w = view.clientWidth, h = view.clientHeight;
@@ -109,48 +82,16 @@ function resize() {
 }
 addEventListener('resize', resize);
 
-// guard stance (matches preview.py), bone-local XYZ euler radians
-const STANCE = {
-  'spine': [0.07, 0, 0.17], 'chest': [0.05, 0, 0.14],
-  'neck': [0, 0, -0.10], 'head': [0.12, 0, -0.14],
-  'upper_arm.L': [0, 0.52, 0.66], 'forearm.L': [0, 0, 1.08],
-  'hand.L': [0, 0, 0.21],
-  'upper_arm.R': [0, -0.38, -0.52], 'forearm.R': [0, 0, -1.54],
-  'hand.R': [0, 0, -0.21],
-  'thigh.L': [0.17, -0.14, 0], 'shin.L': [-0.28, 0, 0],
-  'foot.L': [0.17, 0, 0],
-  'thigh.R': [0.10, 0.14, 0], 'shin.R': [-0.42, 0, 0],
-  'foot.R': [0.24, 0, 0],
-};
-let bones = {};
-let stanceOn = true;
-
-function applyPose(on) {
-  for (const [name, bone] of Object.entries(bones)) {
-    const v = on ? STANCE[name] : null;
-    bone.rotation.set(v ? v[0] : 0, v ? v[1] : 0, v ? v[2] : 0);
-  }
-}
-
 let skeleton = null;
 new GLTFLoader().load('fighter.glb', (gltf) => {
   const model = gltf.scene;
+  // ink hulls render BackSide for the classic outline shell look
   model.traverse((o) => {
-    if (o.isBone) bones[o.name] = o;
-    if (o.isMesh) {
-      o.castShadow = true;
-      if (o.material && o.material.name === 'Ink') {
-        // classic outline shell
-        o.material.side = THREE.BackSide;
-        o.material.envMapIntensity = 0.15;
-        o.castShadow = false;
-      } else if (o.material && 'envMapIntensity' in o.material) {
-        o.material.envMapIntensity = 0.5;
-      }
+    if (o.isMesh && o.material && o.material.name === 'Ink') {
+      o.material.side = THREE.BackSide;
     }
   });
   scene.add(model);
-  applyPose(true);
   const names = [];
   let meshes = 0;
   model.traverse((o) => {
@@ -165,25 +106,17 @@ new GLTFLoader().load('fighter.glb', (gltf) => {
     names.map((n) => `<li>${n}</li>`).join('');
   const joints = skeleton ? skeleton.bones.length : 0;
   document.getElementById('stats').textContent =
-    `${meshes} parts · ${joints} joints · guard stance`;
+    `${meshes} parts · ${joints} joints · T-pose`;
   if (skeleton) { skeleton.visible = false; scene.add(skeleton); }
   resize();
   renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
 }, undefined, (e) => err('Failed to load fighter.glb: ' + e.message));
 
-document.getElementById('stance').onclick = (e) => {
-  stanceOn = !stanceOn;
-  e.target.classList.toggle('on', stanceOn);
-  e.target.textContent = stanceOn ? 'guard stance' : 'T-pose';
-  applyPose(stanceOn);
-  document.getElementById('stats').textContent =
-    document.getElementById('stats').textContent.replace(
-      stanceOn ? 'T-pose' : 'guard stance', stanceOn ? 'guard stance' : 'T-pose');
-};
 document.getElementById('rot').onclick = (e) => {
   controls.autoRotate = !controls.autoRotate;
   e.target.classList.toggle('on', controls.autoRotate);
 };
+controls.autoRotate = true;
 document.getElementById('wire').onclick = (e) => {
   const on = e.target.classList.toggle('on');
   scene.traverse((o) => { if (o.isMesh) o.material.wireframe = on; });
