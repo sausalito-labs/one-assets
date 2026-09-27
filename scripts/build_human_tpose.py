@@ -55,7 +55,9 @@ def _finish(obj, material, bone, smooth=False):
 
 def cube(name, loc, scale, material, bone):
     bpy.ops.mesh.primitive_cube_add(size=2.0, location=loc, scale=scale)
-    return _finish(bpy.context.active_object, material, bone)
+    obj = bpy.context.active_object
+    obj.name = name
+    return _finish(obj, material, bone)
 
 
 def ball(name, loc, radius, material, bone, scale=(1, 1, 1), smooth=True):
@@ -128,25 +130,64 @@ def build_armature():
 
 
 # ---------------------------------------------------------------- body
-def build_body(S, H, RED, WHITE, GOLD, DARK):
+def build_body(S, H, HD, LIPS, SHADE, RED, WHITE, GOLD, DARK):
     X90 = (0, math.radians(90), 0)  # cylinder Z-axis -> X-axis (arms)
     parts = []
     # torso column (lean, defined midsection like the photo)
     parts.append(cube("Pelvis", (0, 0, 1.02), (0.150, 0.100, 0.090), S, "spine"))
     parts.append(cube("Torso", (0, 0, 1.24), (0.165, 0.105, 0.130), S, "spine"))
     parts.append(cube("Chest", (0, 0, 1.43), (0.190, 0.115, 0.090), S, "chest"))
-    parts.append(cyl("Neck", (0, 0, 1.565), 0.060, 0.09, S, "neck"))
-    # head + face (stylized)
-    parts.append(ball("Head", (0, 0, 1.705), 0.115, S, "head"))
-    parts.append(ball("Eye.L", (0.045, 0.102, 1.725), 0.016, DARK, "head"))
-    parts.append(ball("Eye.R", (-0.045, 0.102, 1.725), 0.016, DARK, "head"))
-    parts.append(cube("Mouth", (0, 0.101, 1.655), (0.030, 0.006, 0.008),
+    parts.append(cyl("Neck", (0, 0, 1.565), 0.068, 0.10, S, "neck"))
+    # trapezius slopes into the shoulders (fighter frame)
+    parts.append(cube("Trap.L", (0.135, 0, 1.520), (0.105, 0.060, 0.032), S,
+                      "chest"))
+    parts.append(cube("Trap.R", (-0.135, 0, 1.520), (0.105, 0.060, 0.032), S,
+                      "chest"))
+    # ab grooves, subtle definition
+    parts.append(cube("Abs1", (0, 0.103, 1.285), (0.100, 0.004, 0.010),
+                      SHADE, "spine"))
+    parts.append(cube("Abs2", (0, 0.102, 1.205), (0.095, 0.004, 0.010),
+                      SHADE, "spine"))
+    # ---- sculpted head: longer skull, defined jaw, straight nose ----
+    parts.append(ball("Head", (0, 0.005, 1.705), 0.115, S, "head",
+                      scale=(0.92, 1.05, 1.08)))
+    parts.append(cube("Jaw", (0, 0.020, 1.618), (0.062, 0.082, 0.058), S,
+                      "head"))
+    parts.append(cube("Chin", (0, 0.055, 1.598), (0.048, 0.038, 0.034), S,
+                      "head"))
+    parts.append(ball("Cheek.L", (0.075, 0.055, 1.680), 0.030, S, "head",
+                      scale=(1.0, 0.7, 0.8)))
+    parts.append(ball("Cheek.R", (-0.075, 0.055, 1.680), 0.030, S, "head",
+                      scale=(1.0, 0.7, 0.8)))
+    parts.append(cube("NoseBridge", (0, 0.106, 1.700), (0.008, 0.009, 0.028),
+                      S, "head"))
+    parts.append(ball("NoseTip", (0, 0.112, 1.664), 0.018, S, "head",
+                      scale=(1.0, 0.9, 0.9)))
+    parts.append(ball("Ear.L", (0.108, -0.005, 1.700), 0.032, S, "head",
+                      scale=(0.45, 0.8, 1.1)))
+    parts.append(ball("Ear.R", (-0.108, -0.005, 1.700), 0.032, S, "head",
+                      scale=(0.45, 0.8, 1.1)))
+    # eyes + dark brows (brows stay dark like the photo, hair bleached)
+    parts.append(ball("Eye.L", (0.045, 0.104, 1.725), 0.018, DARK, "head"))
+    parts.append(ball("Eye.R", (-0.045, 0.104, 1.725), 0.018, DARK, "head"))
+    parts.append(cube("Brow.L", (0.054, 0.102, 1.764), (0.030, 0.010, 0.008),
                       DARK, "head"))
-    # bleached textured crop: cap + fringe
-    parts.append(ball("Hair", (0, -0.012, 1.770), 0.120, H, "head",
-                      scale=(1.02, 1.02, 0.62)))
-    parts.append(cube("HairFringe", (0, 0.095, 1.745), (0.085, 0.025, 0.035),
-                      H, "head"))
+    parts.append(cube("Brow.R", (-0.054, 0.102, 1.764), (0.030, 0.010, 0.008),
+                      DARK, "head"))
+    parts.append(cube("LipUpper", (0, 0.104, 1.652), (0.032, 0.007, 0.008),
+                      LIPS, "head"))
+    parts.append(cube("LipLower", (0, 0.103, 1.643), (0.026, 0.006, 0.009),
+                      LIPS, "head"))
+    # bleached textured crop: full top mass, fringe chunks, faded sides
+    parts.append(ball("Hair", (0, -0.015, 1.775), 0.120, H, "head",
+                      scale=(1.02, 1.00, 0.55)))
+    for i, fx in enumerate((-0.058, -0.020, 0.020, 0.058)):
+        parts.append(cube(f"HairChunk.{i}", (fx, 0.092, 1.766),
+                          (0.020, 0.018, 0.022), H, "head"))
+    parts.append(cube("Fade.L", (0.100, -0.005, 1.735), (0.008, 0.055, 0.035),
+                      HD, "head"))
+    parts.append(cube("Fade.R", (-0.100, -0.005, 1.735), (0.008, 0.055, 0.035),
+                      HD, "head"))
     # gold chain from the photo
     parts.append(torus("Chain", (0, 0, 1.560), 0.068, 0.008, GOLD, "chest"))
     # arms, T-pose along X
@@ -157,6 +198,13 @@ def build_body(S, H, RED, WHITE, GOLD, DARK):
                          0.048, 0.28, S, f"forearm.{side}", X90))
         parts.append(ball(f"Hand.{side}", (s * 0.815, 0, 1.47), 0.075, S,
                           f"hand.{side}", scale=(1.25, 0.70, 0.95)))
+        parts.append(ball(f"Thumb.{side}", (s * 0.800, 0.052, 1.478), 0.028,
+                          S, f"hand.{side}", scale=(1.0, 1.3, 0.8)))
+        # red hand wraps: fist + wrist, fight-ready
+        parts.append(cyl(f"WrapFist.{side}", (s * 0.815, 0, 1.47),
+                         0.079, 0.10, RED, f"hand.{side}", X90))
+        parts.append(cyl(f"WrapWrist.{side}", (s * 0.680, 0, 1.47),
+                         0.054, 0.12, RED, f"forearm.{side}", X90))
     # legs
     for side, s in (("L", 1), ("R", -1)):
         parts.append(cyl(f"Thigh.{side}", (s * 0.11, 0, 0.760),
@@ -165,6 +213,8 @@ def build_body(S, H, RED, WHITE, GOLD, DARK):
                          0.058, 0.44, S, f"shin.{side}"))
         parts.append(cube(f"Foot.{side}", (s * 0.11, 0.065, 0.040),
                           (0.050, 0.120, 0.038), S, f"foot.{side}"))
+        parts.append(cyl(f"AnkleWrap.{side}", (s * 0.11, 0, 0.140),
+                         0.062, 0.09, RED, f"shin.{side}"))
     # ---- red Muay Thai shorts, high-cut wide legs ----
     parts.append(cube("Shorts", (0, 0, 0.985), (0.190, 0.140, 0.125), RED, "spine"))
     for side, s in (("L", 1), ("R", -1)):
@@ -186,12 +236,15 @@ def build():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     S = mat("Skin", (0.87, 0.66, 0.53), roughness=0.55)
     H = mat("HairBleach", (0.82, 0.79, 0.72), roughness=0.85)
+    HD = mat("HairFade", (0.60, 0.56, 0.50), roughness=0.9)
+    LIPS = mat("Lips", (0.45, 0.20, 0.18), roughness=0.6)
+    SHADE = mat("SkinShade", (0.72, 0.52, 0.42), roughness=0.6)
     RED = mat("ShortsRed", (0.72, 0.05, 0.09), roughness=0.7)
     WHITE = mat("TrimWhite", (0.93, 0.93, 0.94), roughness=0.6)
     GOLD = mat("Gold", (0.83, 0.62, 0.25), roughness=0.35, metallic=0.8)
     DARK = mat("Dark", (0.08, 0.06, 0.05), roughness=0.5)
     build_armature()  # must exist before _finish binds modifiers
-    parts = build_body(S, H, RED, WHITE, GOLD, DARK)
+    parts = build_body(S, H, HD, LIPS, SHADE, RED, WHITE, GOLD, DARK)
     bpy.ops.object.select_all(action="DESELECT")
     for o in parts:
         o.select_set(True)
