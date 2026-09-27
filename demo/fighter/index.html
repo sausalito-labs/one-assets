@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fighter — T-pose demo</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; background: #141414; color: #eee;
+         margin: 0; display: flex; height: 100vh; }
+  #view { flex: 1; position: relative; min-width: 0; }
+  #view canvas { display: block; width: 100%; height: 100%; }
+  #side { width: 300px; background: #1d1d1d; padding: 16px; overflow-y: auto;
+          border-left: 1px solid #333; }
+  #side h1 { font-size: 1.1em; margin: 0 0 4px; }
+  #side p { font-size: 0.85em; color: #aaa; }
+  #limbs { columns: 2; font-size: 0.8em; list-style: none; padding: 0; }
+  #limbs li { padding: 2px 0; color: #ccc; }
+  #limbs li::before { content: "▸ "; color: #ff5252; }
+  .row { margin: 12px 0; }
+  button { background: #333; color: #eee; border: 1px solid #555;
+           padding: 6px 10px; margin-right: 6px; cursor: pointer;
+           border-radius: 4px; }
+  button.on { background: #ff5252; border-color: #ff5252; color: #fff; }
+  #err { position: absolute; top: 12px; left: 12px; right: 12px; background: #5a1111;
+         padding: 10px; border-radius: 6px; display: none; font-size: 0.85em; }
+  #stats { font-size: 0.8em; color: #888; }
+  a { color: #ff5252; }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="view"><div id="err"></div></div>
+<div id="side">
+  <h1>🥊 Fighter — T-pose</h1>
+  <p>Stylized from weigh-in photo. Red Muay Thai shorts, bleached crop,
+     gold chain. Faces +Y, up +Z, arms along ±X.</p>
+  <div class="row">
+    <button id="rot" class="on">auto-rotate</button>
+    <button id="wire">wireframe</button>
+    <button id="bones">skeleton</button>
+  </div>
+  <div class="row" id="stats">loading…</div>
+  <h3>Separated parts (<span id="count">…</span>)</h3>
+  <ul id="limbs"></ul>
+  <p><a href="../">← one-assets</a> · model: <a href="fighter.glb">fighter.glb</a></p>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const err = (m) => { const e = document.getElementById('err');
+  e.style.display = 'block'; e.textContent = m; };
+const view = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+view.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x141414);
+const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 100);
+camera.position.set(2.4, -2.8, 1.7);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0, 1.0);
+controls.update();
+scene.add(new THREE.HemisphereLight(0xffffff, 0x333344, 1.1));
+const key = new THREE.DirectionalLight(0xffffff, 1.6);
+key.position.set(3, -2, 5); scene.add(key);
+const rim = new THREE.DirectionalLight(0xff8888, 0.5);
+rim.position.set(-3, 2, 2); scene.add(rim);
+const grid = new THREE.GridHelper(4, 20, 0x444444, 0x2a2a2a);
+grid.rotation.x = Math.PI / 2; scene.add(grid);
+
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+
+let skeleton = null;
+new GLTFLoader().load('fighter.glb', (gltf) => {
+  const model = gltf.scene;
+  scene.add(model);
+  const names = [];
+  let meshes = 0;
+  model.traverse((o) => {
+    if (o.isMesh) { meshes++; if (o.name) names.push(o.name); }
+    if (o.isSkinnedMesh && !skeleton) skeleton = new THREE.SkeletonHelper(o);
+  });
+  names.sort();
+  document.getElementById('count').textContent = meshes;
+  document.getElementById('limbs').innerHTML =
+    names.map((n) => `<li>${n}</li>`).join('');
+  const joints = skeleton ? skeleton.bones.length : 0;
+  document.getElementById('stats').textContent =
+    `${meshes} parts · ${joints} joints · T-pose`;
+  if (skeleton) { skeleton.visible = false; scene.add(skeleton); }
+  resize();
+  renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+}, undefined, (e) => err('Failed to load fighter.glb: ' + e.message));
+
+document.getElementById('rot').onclick = (e) => {
+  controls.autoRotate = !controls.autoRotate;
+  e.target.classList.toggle('on', controls.autoRotate);
+};
+controls.autoRotate = true;
+document.getElementById('wire').onclick = (e) => {
+  const on = e.target.classList.toggle('on');
+  scene.traverse((o) => { if (o.isMesh) o.material.wireframe = on; });
+};
+document.getElementById('bones').onclick = (e) => {
+  if (!skeleton) return err('No skeleton in file.');
+  skeleton.visible = !skeleton.visible;
+  e.target.classList.toggle('on', skeleton.visible);
+};
+resize();
+</script>
+</body>
+</html>
