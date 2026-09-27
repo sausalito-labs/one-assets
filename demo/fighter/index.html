@@ -3,28 +3,28 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fighter — T-pose demo</title>
+<title>Fighter — arcade demo</title>
 <style>
   * { box-sizing: border-box; }
-  body { font-family: system-ui, sans-serif; background: #141414; color: #eee;
+  body { font-family: system-ui, sans-serif; background: #1b1b22; color: #eee;
          margin: 0; display: flex; height: 100vh; }
   #view { flex: 1; position: relative; min-width: 0; }
   #view canvas { display: block; width: 100%; height: 100%; }
-  #side { width: 300px; background: #1d1d1d; padding: 16px; overflow-y: auto;
-          border-left: 1px solid #333; }
+  #side { width: 300px; background: #23232c; padding: 16px; overflow-y: auto;
+          border-left: 1px solid #3a3a44; }
   #side h1 { font-size: 1.1em; margin: 0 0 4px; }
-  #side p { font-size: 0.85em; color: #aaa; }
+  #side p { font-size: 0.85em; color: #b8b8c0; }
   #limbs { columns: 2; font-size: 0.8em; list-style: none; padding: 0; }
   #limbs li { padding: 2px 0; color: #ccc; }
   #limbs li::before { content: "▸ "; color: #ff5252; }
   .row { margin: 12px 0; }
-  button { background: #333; color: #eee; border: 1px solid #555;
-           padding: 6px 10px; margin-right: 6px; cursor: pointer;
+  button { background: #33333d; color: #eee; border: 1px solid #55555f;
+           padding: 6px 10px; margin: 0 6px 6px 0; cursor: pointer;
            border-radius: 4px; }
   button.on { background: #ff5252; border-color: #ff5252; color: #fff; }
   #err { position: absolute; top: 12px; left: 12px; right: 12px; background: #5a1111;
          padding: 10px; border-radius: 6px; display: none; font-size: 0.85em; }
-  #stats { font-size: 0.8em; color: #888; }
+  #stats { font-size: 0.8em; color: #999; }
   a { color: #ff5252; }
 </style>
 <script type="importmap">
@@ -37,13 +37,14 @@
 <body>
 <div id="view"><div id="err"></div></div>
 <div id="side">
-  <h1>🥊 Fighter — T-pose</h1>
-  <p>Stylized from weigh-in photo. Red Muay Thai shorts, hand wraps,
-     bleached crop, gold chain. Faces +Y, up +Z, arms along ±X.</p>
+  <h1>🥊 Fighter — arcade demo</h1>
+  <p>Stylized from the weigh-in photo: red Muay Thai shorts, hand wraps,
+     bleached crop, gold chain. T-pose, ink outlines, separated limbs.</p>
   <div class="row">
     <button id="rot" class="on">auto-rotate</button>
     <button id="wire">wireframe</button>
     <button id="bones">skeleton</button>
+    <button id="ink" class="on">outline</button>
   </div>
   <div class="row" id="stats">loading…</div>
   <h3>Separated parts (<span id="count">…</span>)</h3>
@@ -54,27 +55,48 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 const err = (m) => { const e = document.getElementById('err');
   e.style.display = 'block'; e.textContent = m; };
 const view = document.getElementById('view');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.25;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 view.appendChild(renderer.domElement);
+
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x232329);
+scene.background = new THREE.Color(0x3a3a46);
+const pmrem = new THREE.PMREMGenerator(renderer);
+const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environment = env;
+
 const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 100);
-camera.position.set(2.4, -2.8, 1.7);
+camera.position.set(2.5, -2.9, 1.6);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0, 1.0);
+controls.autoRotate = true;
+controls.autoRotateSpeed = 1.1;
 controls.update();
-scene.add(new THREE.HemisphereLight(0xffffff, 0x555566, 1.8));
-const key = new THREE.DirectionalLight(0xffffff, 3.0);
-key.position.set(3, -2, 5); scene.add(key);
-const rim = new THREE.DirectionalLight(0xff9999, 1.2);
-rim.position.set(-3, 2, 2); scene.add(rim);
-const grid = new THREE.GridHelper(4, 20, 0x777788, 0x3a3a44);
-grid.rotation.x = Math.PI / 2; scene.add(grid);
+
+// bright, even arcade framing: strong front-top key, soft fill, cool rim
+const key = new THREE.DirectionalLight(0xfff4e6, 2.2);
+key.position.set(3, -3.5, 4.5);
+scene.add(key);
+const fill = new THREE.DirectionalLight(0xdfe8ff, 1.1);
+fill.position.set(-3.5, -2.5, 1.5);
+scene.add(fill);
+const rim = new THREE.DirectionalLight(0xaaccff, 1.0);
+rim.position.set(-2, 4, 2.5);
+scene.add(rim);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x606070, 0.9));
+
+const grid = new THREE.GridHelper(5, 25, 0x8a8a99, 0x55555f);
+grid.rotation.x = Math.PI / 2;
+grid.position.y = 0.001;
+scene.add(grid);
 
 function resize() {
   const w = view.clientWidth, h = view.clientHeight;
@@ -83,12 +105,19 @@ function resize() {
 addEventListener('resize', resize);
 
 let skeleton = null;
+const inkMeshes = [];
 new GLTFLoader().load('fighter.glb', (gltf) => {
   const model = gltf.scene;
-  // ink hulls render BackSide for the classic outline shell look
   model.traverse((o) => {
-    if (o.isMesh && o.material && o.material.name === 'Ink') {
-      o.material.side = THREE.BackSide;
+    if (o.isMesh) {
+      if (o.material && o.material.name === 'Ink') {
+        o.material.side = THREE.BackSide;
+        o.material.envMapIntensity = 0.0;
+        o.renderOrder = -1;
+        inkMeshes.push(o);
+      } else if (o.material) {
+        o.material.envMapIntensity = 0.55;
+      }
     }
   });
   scene.add(model);
@@ -116,7 +145,6 @@ document.getElementById('rot').onclick = (e) => {
   controls.autoRotate = !controls.autoRotate;
   e.target.classList.toggle('on', controls.autoRotate);
 };
-controls.autoRotate = true;
 document.getElementById('wire').onclick = (e) => {
   const on = e.target.classList.toggle('on');
   scene.traverse((o) => { if (o.isMesh) o.material.wireframe = on; });
@@ -125,6 +153,10 @@ document.getElementById('bones').onclick = (e) => {
   if (!skeleton) return err('No skeleton in file.');
   skeleton.visible = !skeleton.visible;
   e.target.classList.toggle('on', skeleton.visible);
+};
+document.getElementById('ink').onclick = (e) => {
+  const on = e.target.classList.toggle('on');
+  inkMeshes.forEach((m) => { m.visible = on; });
 };
 resize();
 </script>
