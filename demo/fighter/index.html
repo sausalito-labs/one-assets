@@ -85,11 +85,19 @@ addEventListener('resize', resize);
 let skeleton = null;
 new GLTFLoader().load('fighter.glb', (gltf) => {
   const model = gltf.scene;
+  // ink hulls render BackSide for the classic outline shell look
+  model.traverse((o) => {
+    if (o.isMesh && o.material && o.material.name === 'Ink') {
+      o.material.side = THREE.BackSide;
+    }
+  });
   scene.add(model);
   const names = [];
   let meshes = 0;
   model.traverse((o) => {
-    if (o.isMesh) { meshes++; if (o.name) names.push(o.name); }
+    if (o.isMesh && !o.name.startsWith('Ink_')) {
+      meshes++; if (o.name) names.push(o.name);
+    }
     if (o.isSkinnedMesh && !skeleton) skeleton = new THREE.SkeletonHelper(o);
   });
   names.sort();

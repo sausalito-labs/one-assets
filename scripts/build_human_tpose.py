@@ -59,9 +59,11 @@ def finish(obj, material, bone, subsurf=0, smooth=True):
     mod = obj.modifiers.new("ArmatureBind", "ARMATURE")
     mod.object = arm
     if subsurf:
+        # level 1 on 24-32 seg bases is plenty smooth; higher levels only
+        # bloat exports (modifiers bake on export) and stall Freestyle
         sm = obj.modifiers.new("Smooth", "SUBSURF")
-        sm.levels = subsurf
-        sm.render_levels = subsurf
+        sm.levels = min(subsurf, 1)
+        sm.render_levels = min(subsurf, 1)
     vg = obj.vertex_groups.new(name=bone)
     vg.add(list(range(len(obj.data.vertices))), 1.0, "REPLACE")
     return obj
@@ -85,12 +87,20 @@ def ball(name, loc, radius, material, bone, scale=(1, 1, 1), subsurf=0,
 
 
 def cyl(name, loc, radius, depth, material, bone, rotation=(0, 0, 0),
-        subsurf=0, verts=24):
+        subsurf=0, verts=24, cuts=0):
     bpy.ops.mesh.primitive_cylinder_add(
         radius=radius, depth=depth, location=loc, rotation=rotation,
         vertices=verts)
     obj = bpy.context.active_object
     obj.name = name
+    if cuts:
+        # raw cylinders only have top+bottom rings, so length profiles
+        # would only sample the endpoints - cut length rings first
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.mesh.subdivide(number_cuts=cuts)
+        bpy.ops.object.mode_set(mode="OBJECT")
     return finish(obj, material, bone, subsurf=subsurf)
 
 
@@ -223,6 +233,94 @@ BONES = {
 }
 
 
+# ---------------------------------------------------------------- ink + dirt
+def apply_dirt(parts):
+    """Bake crevice darkening into a white-initialized 'Dirt' color
+    attribute. three.js multiplies COLOR_0 over base color automatically,
+    so the web demo and any PBR viewer get cheap SF-style grime. Safe
+    fallback: attribute stays white (no darkening) if the op is missing.
+    """
+    for o in parts:
+        me = o.data
+        attr = me.color_attributes.get("Dirt")
+        if attr is None:
+            attr = me.color_attributes.new("Dirt", "FLOAT_COLOR", "POINT")
+        n = len(me.vertices)
+        attr.data.foreach_set("color", [1.0, 1.0, 1.0, 1.0] * n)
+        me.color_attributes.active_color = attr
+        try:
+            me.color_attributes.render_color_index = (
+                me.color_attributes.find("Dirt"))
+        except Exception:  # noqa: BLE001 - older Blender, active is enough
+            pass
+    for o in parts:
+        try:
+            bpy.context.view_layer.objects.active = o
+            bpy.ops.object.mode_set(mode="VERTEX_PAINT")
+            bpy.ops.paint.vertex_color_dirt()
+            bpy.ops.object.mode_set(mode="OBJECT")
+        except Exception as e:  # noqa: BLE001 - keep whites, skip dirt
+            print(f"[dirt] skipped {o.name}: {e}")
+            try:
+                bpy.ops.object.mode_set(mode="OBJECT")
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def build_ink(parts):
+    """Inverted-hull ink outlines, SFIV style. Hulls copy the part's
+    armature bind so they follow poses. They carry NO slicer-facing
+    role: excluded from the FBX (game) export by selection, included in
+    the GLB (web demo) where the viewer renders them BackSide.
+    """
+    ink_mat = mat("Ink", (0.015, 0.015, 0.02), roughness=1.0)
+    # cull the hull's outer faces: with flipped normals this leaves only
+    # the inner far-side shell visible = classic outline rim
+    ink_mat.use_backface_culling = True
+    arm = bpy.data.objects["FighterArmature"]
+    hulls = []
+    bpy.ops.object.select_all(action="DESELECT")
+    for o in parts:
+        h = o.copy()
+        h.data = o.data.copy()
+        h.name = "Ink_" + o.name
+        bpy.context.collection.objects.link(h)
+        while h.vertex_groups:
+            h.vertex_groups.remove(h.vertex_groups[0])
+        for m in h.modifiers:
+            if m.type == "SUBSURF":
+                m.levels = 1
+                m.render_levels = 1
+            elif m.type == "ARMATURE":
+                m.object = arm
+        if not any(m.type == "ARMATURE" for m in h.modifiers):
+            mod = h.modifiers.new("ArmatureBind", "ARMATURE")
+            mod.object = arm
+        h.select_set(True)
+        bpy.context.view_layer.objects.active = h
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.mesh.flip_normals()
+        bpy.ops.object.mode_set(mode="OBJECT")
+        h.select_set(False)
+        vg = h.vertex_groups.new(name=o.vertex_groups[0].name)
+        vg.add(list(range(len(h.data.vertices))), 1.0, "REPLACE")
+        h.data.materials.clear()
+        h.data.materials.append(ink_mat)
+        sc = h.scale
+        h.scale = (sc[0] * 1.03, sc[1] * 1.03, sc[2] * 1.03)
+        # stills default to Freestyle lines (see preview.py); hulls serve
+        # the realtime GLB where the viewer draws them BackSide
+        h.hide_render = True
+        hulls.append(h)
+    return hulls
+
+
+def select_for_export(parts, hulls, with_ink):
+    bpy.ops.object.select_all(action="DESELECT")
+    for o in parts + (hulls if with_ink else []):
+        o.select_set(True)
+    bpy.data.objects["FighterArmature"].select_set(True)
 def build_armature():
     arm_data = bpy.data.armatures.new("FighterArmature")
     arm = bpy.data.objects.new("FighterArmature", arm_data)
@@ -268,7 +366,8 @@ def build_body(S, H, HD, LIPS, SHADE, RED, WHITE, GOLD, DARK):
     parts.append(ball("Lat.R", (-0.175, -0.01, 1.36), 0.075, S, "chest",
                       scale=(0.7, 0.9, 1.3), subsurf=2))
     # neck + traps, thick fighter column
-    neck = cyl("Neck", (0, 0, 1.560), 0.075, 0.12, S, "neck", subsurf=2)
+    neck = cyl("Neck", (0, 0, 1.560), 0.075, 0.12, S, "neck", subsurf=2,
+                 cuts=3)
     parts.append(profile(neck, [(0, 1.15), (0.5, 1.05), (1, 0.95)]))
     parts.append(ball("Trap.L", (0.135, -0.01, 1.525), 0.085, S, "chest",
                       scale=(1.3, 0.8, 0.55), subsurf=2))
@@ -313,11 +412,11 @@ def build_body(S, H, HD, LIPS, SHADE, RED, WHITE, GOLD, DARK):
                           f"upper_arm.{side}", scale=(1.0, 1.0, 1.2),
                           subsurf=2))
         ua = cyl(f"UpperArm.{side}", (s * 0.350, 0, 1.47), 0.068, 0.30, S,
-                 f"upper_arm.{side}", X90, subsurf=2)
+                 f"upper_arm.{side}", X90, subsurf=2, cuts=6)
         parts.append(profile(ua, [(0, 0.80), (0.45, 1.12), (1, 0.95)]))
         bulge_y(ua, 0.02, 0.09, 0.018)  # bicep peak
         fa = cyl(f"Forearm.{side}", (s * 0.615, 0, 1.47), 0.058, 0.28, S,
-                 f"forearm.{side}", X90, subsurf=2)
+                 f"forearm.{side}", X90, subsurf=2, cuts=6)
         parts.append(profile(fa, [(0, 0.72), (0.35, 1.05), (1, 0.55)]))
         fist = ball(f"Hand.{side}", (s * 0.845, 0, 1.47), 0.082, S,
                     f"hand.{side}", scale=(1.35, 0.78, 1.0), subsurf=2)
@@ -327,19 +426,19 @@ def build_body(S, H, HD, LIPS, SHADE, RED, WHITE, GOLD, DARK):
                           subsurf=1))
         # red hand wraps over fist + wrist
         wf = cyl(f"WrapFist.{side}", (s * 0.845, 0, 1.47), 0.086, 0.10, RED,
-                 f"hand.{side}", X90, subsurf=1)
+                 f"hand.{side}", X90, subsurf=1, cuts=2)
         parts.append(profile(wf, [(0, 0.92), (0.5, 1.0), (1, 0.92)]))
         ww = cyl(f"WrapWrist.{side}", (s * 0.700, 0, 1.47), 0.058, 0.12, RED,
-                 f"forearm.{side}", X90, subsurf=1)
+                 f"forearm.{side}", X90, subsurf=1, cuts=3)
         parts.append(profile(ww, [(0, 1.05), (1, 0.9)]))
     # ---- legs: quad sweep, calf diamonds, heavy feet ----
     for side, s in (("L", 1), ("R", -1)):
         th = cyl(f"Thigh.{side}", (s * 0.115, 0, 0.760), 0.100, 0.46, S,
-                 f"thigh.{side}", subsurf=2)
+                 f"thigh.{side}", subsurf=2, cuts=6)
         parts.append(profile(th, [(0, 0.68), (0.45, 1.02), (0.8, 1.18),
                                   (1, 1.05)]))
         sh = cyl(f"Shin.{side}", (s * 0.115, 0, 0.315), 0.062, 0.44, S,
-                 f"shin.{side}", subsurf=2)
+                 f"shin.{side}", subsurf=2, cuts=6)
         parts.append(profile(sh, [(0, 0.55), (0.35, 0.85), (0.62, 1.08),
                                   (1, 0.72)]))
         bulge_y(sh, 0.10, 0.12, 0.020)  # calf diamond
@@ -350,14 +449,15 @@ def build_body(S, H, HD, LIPS, SHADE, RED, WHITE, GOLD, DARK):
                           f"foot.{side}", scale=(0.95, 1.0, 0.62), subsurf=1))
     for side, s in (("L", 1), ("R", -1)):
         aw = cyl(f"AnkleWrap.{side}", (s * 0.115, 0, 0.145), 0.066, 0.10,
-                 RED, f"shin.{side}", subsurf=1)
+                 RED, f"shin.{side}", subsurf=1, cuts=2)
         parts.append(profile(aw, [(0, 1.08), (1, 0.92)]))
     # ---- red Muay Thai shorts, rounded ----
     parts.append(ball("Shorts", (0, 0, 1.000), 0.20, RED, "spine",
                       scale=(0.95, 0.62, 0.60), subsurf=2))
     for side, s in (("L", 1), ("R", -1)):
         parts.append(cyl(f"ShortLeg.{side}", (s * 0.115, 0, 0.825),
-                         0.112, 0.20, RED, f"thigh.{side}", subsurf=2))
+                         0.112, 0.20, RED, f"thigh.{side}", subsurf=2,
+                         cuts=3))
         parts.append(cyl(f"LegTrim.{side}", (s * 0.115, 0, 0.745),
                          0.116, 0.025, WHITE, f"thigh.{side}"))
     parts.append(cube("Waistband", (0, 0, 1.098), (0.196, 0.146, 0.028),
@@ -382,12 +482,11 @@ def build():
     DARK = mat("Dark", (0.08, 0.06, 0.05), roughness=0.5)
     build_armature()  # must exist before finish() binds modifiers
     parts = build_body(S, H, HD, LIPS, SHADE, RED, WHITE, GOLD, DARK)
-    bpy.ops.object.select_all(action="DESELECT")
-    for o in parts:
-        o.select_set(True)
-    bpy.data.objects["FighterArmature"].select_set(True)
-    print(f"[build] fighter done: {len(parts)} parts + armature, "
-          f"{len(BONES)} bones")
+    apply_dirt(parts)
+    hulls = build_ink(parts)
+    print(f"[build] fighter done: {len(parts)} parts + {len(hulls)} ink hulls"
+          f" + armature, {len(BONES)} bones")
+    return parts, hulls
 
 
 def parse_args(argv):
@@ -406,15 +505,25 @@ def main(argv):
         raise RuntimeError("Run inside Blender: blender --background --python "
                            "scripts/build_human_tpose.py")
     build()
+    parts = [o for o in bpy.data.objects if o.type == "MESH"
+             and not o.name.startswith("Ink_")]
+    hulls = [o for o in bpy.data.objects if o.type == "MESH"
+             and o.name.startswith("Ink_")]
     bpy.ops.wm.save_as_mainfile(filepath=args.out)
     print(f"[build] saved {args.out}")
     if args.fbx:
-        bpy.ops.export_scene.fbx(filepath=args.fbx, use_selection=False,
+        # game export: ink excluded so slicer sprites stay clean
+        select_for_export(parts, hulls, with_ink=False)
+        bpy.ops.export_scene.fbx(filepath=args.fbx, use_selection=True,
                                  add_leaf_bones=False)
         print(f"[build] exported {args.fbx}")
     if args.glb:
+        # web export: ink included, viewer renders it BackSide.
+        # ACTIVE forces the Dirt color attribute out as COLOR_0.
+        select_for_export(parts, hulls, with_ink=True)
         bpy.ops.export_scene.gltf(filepath=args.glb, export_format="GLB",
-                                  use_selection=True)
+                                  use_selection=True,
+                                  export_vertex_color="ACTIVE")
         print(f"[build] exported {args.glb}")
 
 
