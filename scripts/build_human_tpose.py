@@ -365,11 +365,9 @@ def build_ink(parts, thickness=0.011):
             mod = h.modifiers.new("ArmatureBind", "ARMATURE")
             mod.object = arm
         _copy_vgroups(o, h)
-        bpy.context.view_layer.objects.active = h
-        bpy.ops.object.mode_set(mode="EDIT")
-        bpy.ops.mesh.select_all(action="SELECT")
-        bpy.ops.mesh.flip_normals()
-        bpy.ops.object.mode_set(mode="OBJECT")
+        # NOTE: do NOT flip normals. glTF/three draws BackSide, which after
+        # a flip is the NEAR shell - that blacked out the whole model. The
+        # far shell (outline) is exactly the unflipped BackSide geometry.
         h.data.materials.clear()
         h.data.materials.append(ink_mat)
         # stills use Freestyle lines instead (preview.py)
@@ -596,7 +594,7 @@ MUSCLE_BUMPS = [
     # ---- chest ----
     ((0.098, 0, 1.452), (0.080, 0.060), 0.072, front_v),      # pec L
     ((-0.098, 0, 1.452), (0.080, 0.060), 0.072, front_v),     # pec R
-    ((0.000, 0, 1.448), (0.014, 0.078), -0.052, front_v),     # sternum
+    ((0.000, 0, 1.462), (0.013, 0.058), -0.030, front_v),     # sternum
     # ---- abs: 3 rows, with grooves between ----
     ((0.050, 0, 1.322), (0.032, 0.030), 0.056, front_v),
     ((-0.050, 0, 1.322), (0.032, 0.030), 0.056, front_v),
@@ -606,6 +604,8 @@ MUSCLE_BUMPS = [
     ((-0.050, 0, 1.165), (0.032, 0.029), 0.045, front_v),
     ((0.000, 0, 1.245), (0.010, 0.100), -0.042, front_v),     # linea alba
     ((0.000, 0, 1.283), (0.062, 0.011), -0.040, front_v),     # ab groove
+    ((0.098, 0, 1.438), (0.088, 0.013), -0.030, front_v),     # pec underline L
+    ((-0.098, 0, 1.438), (0.088, 0.013), -0.030, front_v),    # pec underline R
     ((0.000, 0, 1.203), (0.062, 0.011), -0.040, front_v),     # ab groove
     # ---- obliques / serratus ----
     ((0.126, 0.015, 1.230), (0.026, 0.075), 0.028, front_v),
@@ -739,34 +739,81 @@ def build_body(S, H, HD, LIPS, SHADE, RED, WHITE, GOLD, DARK):
     return parts
 
 
-def apply_face_texture(head, image_path, crop, bounds, min_front=0.55):
+def apply_face_texture(head, image_path, crop, bounds, min_front=0.05):
     """Project a photo onto the front of the head.
 
-    Geometry alone cannot encode a specific person's face. This maps the
-    photo's face rectangle onto the head's front-facing polygons with a
-    planar projection; everything else keeps the plain skin material, so
-    no mirrored face wraps onto the back of the skull.
+    Geometry alone cannot encode a specific person's face. The crop is
+    padded with the photo's own edge skin tone first, so the head's side
+    polygons (which fall outside the crop) blend to skin instead of
+    grabbing the photo's black backdrop.
     """
+    import numpy as np
     me = head.data
-    img = bpy.data.images.load(image_path)
-    w, h = img.size
-    x0, y0, x1, y1 = crop
-    xmin, xmax, zmin, zmax = bounds
+    src = bpy.data.images.load(image_path)
+    w, h = src.size
+    px = np.empty(w * h * 4, dtype=np.float32)
+    src.pixels.foreach_get(px)
+    px = px.reshape(h, w, 4)                      # bottom-up rows
+    x0, y0, x1, y1 = [int(v) for v in crop]
+    by0, by1 = h - y1, h - y0                     # top-left -> bottom-up
+    crop_px = px[by0:by1, x0:x1, :]
+    ch, cw = crop_px.shape[:2]
+    # skin tone from the lower-middle of the face (cheek/jaw), avoiding hair
+    cmid = crop_px[ch // 2: int(ch * 0.8), cw // 4: int(cw * 0.75), :3]
+    skin = cmid.reshape(-1, 3).mean(axis=0)
+    # the studio backdrop is pure black and bleeds into the crop; flood-fill
+    # it inward from the borders and repaint it as skin
+    lum = crop_px[:, :, :3].mean(axis=2)
+    dark = lum < 0.06
+    seeded = np.zeros_like(dark)
+    seeded[0, :] = dark[0, :]
+    seeded[-1, :] = dark[-1, :]
+    seeded[:, 0] = dark[:, 0]
+    seeded[:, -1] = dark[:, -1]
+    for _ in range(cw + ch):
+        grown = seeded.copy()
+        grown[1:] |= seeded[:-1]
+        grown[:-1] |= seeded[1:]
+        grown[:, 1:] |= seeded[:, :-1]
+        grown[:, :-1] |= seeded[:, 1:]
+        grown &= dark
+        if np.array_equal(grown, seeded):
+            break
+        seeded = grown
+    crop_px[seeded, :3] = skin
+    # hair colour straight from the photo (top band of the crop)
+    hairband = crop_px[: max(4, ch // 9), :, :3].reshape(-1, 3)
+    hairband = hairband[hairband.mean(axis=1) > 0.18]   # skip backdrop
+    hair_col = hairband.mean(axis=0) if len(hairband) else np.array([0.55, 0.5, 0.42])
+    hm = bpy.data.materials.get("HairBleach")
+    if hm:
+        hm.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (
+            float(hair_col[0]), float(hair_col[1]), float(hair_col[2]), 1.0)
+    pad = int(0.30 * max(ch, cw))
+    nw, nh = cw + 2 * pad, ch + 2 * pad
+    canvas = np.ones((nh, nw, 4), dtype=np.float32)
+    canvas[:, :, :3] = skin
+    canvas[pad:pad + ch, pad:pad + cw, :] = crop_px
+    tex_img = bpy.data.images.new("FaceTex", nw, nh, alpha=True)
+    tex_img.pixels.foreach_set(canvas.ravel())
+    try:
+        tex_img.pack()
+    except Exception as e:  # noqa: BLE001
+        print(f"[face] pack failed ({e}); exporter should still embed")
     face_mat = mat("FaceTex", (1, 1, 1), roughness=0.5)
     nt = face_mat.node_tree
     bsdf = nt.nodes.get("Principled BSDF")
-    tex = nt.nodes.new("ShaderNodeTexImage")
-    tex.image = img
-    nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+    node = nt.nodes.new("ShaderNodeTexImage")
+    node.image = tex_img
+    nt.links.new(node.outputs["Color"], bsdf.inputs["Base Color"])
     me.materials.append(face_mat)
     face_idx = len(me.materials) - 1
-    # the primitive already carries a spherical UV map; writing into it (or
-    # a second layer the renderer won't read) samples the wrong pixels.
     while me.uv_layers:
         me.uv_layers.remove(me.uv_layers[0])
     uv = me.uv_layers.new(name="FaceUV")
     me.uv_layers.active = uv
     uvl = uv.data
+    xmin, xmax, zmin, zmax = bounds
     mw = head.matrix_world
     nfront = 0
     for poly in me.polygons:
@@ -774,17 +821,15 @@ def apply_face_texture(head, image_path, crop, bounds, min_front=0.55):
             poly.material_index = face_idx
             nfront += 1
         for li in poly.loop_indices:
-            # WORLD coords: the head mesh is centred on the origin and its
-            # world position lives in the object transform
             v = mw @ me.vertices[me.loops[li].vertex_index].co
-            u01 = min(max((v.x - xmin) / (xmax - xmin), 0.0), 1.0)
-            t01 = min(max((v.z - zmin) / (zmax - zmin), 0.0), 1.0)
-            px = x0 + u01 * (x1 - x0)
-            py = y1 - t01 * (y1 - y0)
-            uvl[li].uv = (px / w, 1.0 - py / h)
+            u01 = (v.x - xmin) / (xmax - xmin)
+            t01 = (v.z - zmin) / (zmax - zmin)
+            cx = pad + u01 * cw
+            cy = pad + t01 * ch                    # bottom-up
+            uvl[li].uv = (cx / nw, cy / nh)
     me.update()
-    print(f"[face] textured {nfront}/{len(me.polygons)} head polys "
-          f"from {image_path}")
+    print(f"[face] textured {nfront}/{len(me.polygons)} head polys; "
+          f"padded {cw}x{ch} -> {nw}x{nh}, skin={skin.round(2)}")
 
 
 def build(do_dirt=False, skip_ink=False, face=None, face_crop=None,
@@ -824,6 +869,19 @@ def build(do_dirt=False, skip_ink=False, face=None, face_crop=None,
         # Off by default; only enable if the values are checked first.
         apply_dirt(parts)
     hulls = [] if skip_ink else build_ink(parts)
+    for o in parts + hulls:
+        try:
+            bpy.context.view_layer.objects.active = o
+            bpy.ops.object.mode_set(mode="EDIT")
+            bpy.ops.mesh.select_all(action="SELECT")
+            bpy.ops.mesh.normals_make_consistent(inside=False)
+            bpy.ops.object.mode_set(mode="OBJECT")
+        except Exception as e:  # noqa: BLE001
+            print(f"[build] normals fix skipped for {o.name}: {e}")
+            try:
+                bpy.ops.object.mode_set(mode="OBJECT")
+            except Exception:  # noqa: BLE001
+                pass
     print(f"[build] fighter done: {len(parts)} meshes"
           f" + {len(hulls)} ink hulls + armature, {len(BONES)} bones")
     return parts, hulls

@@ -19,6 +19,7 @@ VIEWS = {
     "side": ((3.2, 0.0, 1.20), (0, 0, 1.02), 40),
     "back": ((0.0, -3.2, 1.25), (0, 0, 1.06), 40),
     "head": ((0.30, 1.15, 1.72), (0, 0.02, 1.69), 36),
+    "face": ((0.12, 0.62, 1.760), (0, 0.04, 1.745), 34),
     "head3q": ((0.95, 1.00, 1.74), (0, 0.02, 1.69), 36),
     "legs": ((0.0, 2.4, 0.65), (0, 0, 0.60), 40),
 }
@@ -98,6 +99,15 @@ def main():
     ap.add_argument("--size", type=int, default=560)
     ap.add_argument("--ss", type=int, default=2, help="supersample factor")
     ap.add_argument("--ambient", type=float, default=0.34)
+    ap.add_argument("--browser", action="store_true",
+                    help="simulate three.js: meshes FrontSide, Ink BackSide")
+    ap.add_argument("--only-tex", action="store_true",
+                    help="render only textured triangles (debug)")
+    ap.add_argument("--debug-tex", action="store_true",
+                    help="paint textured tris green, ignore the image")
+    ap.add_argument("--cull", default="none",
+                    choices=["none", "front", "back"],
+                    help="cull faces by projected winding (simulate GL sides)")
     ap.add_argument("--z", action="store_true",
                     help="accurate z-buffer (slow) instead of painter's")
     a = ap.parse_args()
@@ -105,10 +115,19 @@ def main():
     d = np.load(a.npz)
     tris = d["tris"].astype(np.float64)
     cols = d["cols"].astype(np.float64)
+    if a.only_tex and "texids" in d:
+        m = d["texids"] >= 0
+        orig = d
+        d = {k: (orig[k][m] if (hasattr(orig[k], "shape")
+                                and orig[k].shape[:1] == m.shape) else orig[k])
+             for k in orig.files}
+        tris = d["tris"].astype(np.float64)
+        cols = d["cols"].astype(np.float64)
     uvs = d["uvs"].astype(np.float64) if "uvs" in d else None
     texids = d["texids"] if "texids" in d else None
+    isink = d["isink"] if "isink" in d.keys() else None
     images = {int(k.split("_")[1]): d[k].astype(np.float64)
-              for k in d.files
+              for k in d.keys()
               if k.startswith("img_") and not k.startswith("imgname_")}
     W = H = a.size * a.ss
     pos, right, up, fwd, f = basis(*VIEWS[a.view], W, H)
@@ -130,17 +149,31 @@ def main():
     tocam /= np.maximum(np.linalg.norm(tocam, axis=1, keepdims=True), 1e-9)
     flip = (fn * tocam).sum(axis=1) < 0
     fn[flip] *= -1
-    L1 = np.array([0.42, -0.78, 0.46]); L1 /= np.linalg.norm(L1)
-    L2 = np.array([-0.55, -0.15, 0.30]); L2 /= np.linalg.norm(L2)
+    L1 = np.array([0.40, 0.72, 0.57]); L1 /= np.linalg.norm(L1)
+    L2 = np.array([-0.62, 0.30, 0.24]); L2 /= np.linalg.norm(L2)
     lam1 = np.clip(fn @ L1, 0, 1)
     lam2 = np.clip(fn @ L2, 0, 1)
     shade = np.clip(a.ambient + lam1 * 0.62 + lam2 * 0.22, 0, 1.35)
 
+    keep = z.min(axis=1) > 0.02
+    if a.debug_tex and texids is not None:
+        cols[texids >= 0] = (0.0, 1.0, 0.2)
+        images = {}
+    if a.browser and isink is not None:
+        area = ((proj[:, 1, 0] - proj[:, 0, 0]) * (proj[:, 2, 1] - proj[:, 0, 1])
+                - (proj[:, 2, 0] - proj[:, 0, 0]) * (proj[:, 1, 1] - proj[:, 0, 1]))
+        keep = keep & np.where(isink == 1, area > 0, area < 0)
+    elif a.cull != "none":
+        area = ((proj[:, 1, 0] - proj[:, 0, 0]) * (proj[:, 2, 1] - proj[:, 0, 1])
+                - (proj[:, 2, 0] - proj[:, 0, 0]) * (proj[:, 1, 1] - proj[:, 0, 1]))
+        if a.cull == "front":
+            keep = keep & (area < 0)
+        else:
+            keep = keep & (area > 0)
     depth = z.mean(axis=1)
     if a.z:
-        img = zrender(proj, z, cols, shade, W, H, (26, 26, 32),
-                      z.min(axis=1) > 0.02, uvs=uvs, texids=texids,
-                      images=images)
+        img = zrender(proj, z, cols, shade, W, H, (26, 26, 32), keep,
+                      uvs=uvs, texids=texids, images=images)
         out_img = Image.fromarray(img)
         if a.ss > 1:
             out_img = out_img.resize((a.size, a.size), Image.LANCZOS)

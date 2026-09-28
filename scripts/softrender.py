@@ -42,12 +42,17 @@ def gather(blend, skip_ink=True, subsurf=None):
                     m.levels = subsurf
                     m.render_levels = subsurf
     dg = bpy.context.evaluated_depsgraph_get()
-    tris, cols, uvs, texids = [], [], [], []
+    tris, cols, uvs, texids, inks = [], [], [], [], []
     images = {}
     for obj in bpy.data.objects:
-        if obj.type != "MESH" or obj.hide_render:
+        if obj.type != "MESH":
             continue
-        if skip_ink and obj.name.startswith("Ink_"):
+        is_ink = obj.name.startswith("Ink_")
+        if skip_ink and is_ink:
+            continue
+        # ink hulls carry hide_render=True (stills use Freestyle), so honour
+        # them explicitly when the caller asked for ink
+        if obj.hide_render and not is_ink:
             continue
         ev = obj.evaluated_get(dg)
         me = ev.to_mesh()
@@ -66,6 +71,7 @@ def gather(blend, skip_ink=True, subsurf=None):
             m = slot.material
             col = (0.8, 0.8, 0.8)
             tid = -1
+            ink = 1 if (m and m.name == "Ink") else 0
             if m:
                 bsdf = m.node_tree.nodes.get("Principled BSDF") if m.use_nodes else None
                 if bsdf:
@@ -76,7 +82,7 @@ def gather(blend, skip_ink=True, subsurf=None):
                     if name not in images:
                         images[name] = (len(images), arr)
                     tid = images[name][0]
-            mslot.append((col, tid))
+            mslot.append((col, tid, ink))
         poly_tid = np.zeros(len(me.polygons), dtype=np.int32)
         if uv_layer is not None:
             uvarr = np.empty(len(me.loops) * 2, dtype=np.float64)
@@ -85,7 +91,7 @@ def gather(blend, skip_ink=True, subsurf=None):
         else:
             uvarr = np.zeros((len(me.loops), 2))
         for i, p in enumerate(me.polygons):
-            col, tid = mslot[p.material_index] if mslot else ((0.8, 0.8, 0.8), -1)
+            col, tid, ink = mslot[p.material_index] if mslot else ((0.8, 0.8, 0.8), -1, 0)
             vids = list(p.vertices)
             lids = list(p.loop_indices)
             for k in range(1, len(vids) - 1):
@@ -93,6 +99,7 @@ def gather(blend, skip_ink=True, subsurf=None):
                 tris.append(tri)
                 cols.append(col)
                 texids.append(tid)
+                inks.append(ink)
                 uvs.append([uvarr[lids[0]], uvarr[lids[k]],
                             uvarr[lids[k + 1]]])
         ev.to_mesh_clear()
@@ -101,6 +108,7 @@ def gather(blend, skip_ink=True, subsurf=None):
         "cols": np.array(cols, np.float32),
         "uvs": np.array(uvs, np.float32),
         "texids": np.array(texids, np.int32),
+        "isink": np.array(inks, np.int32),
     }
     for name, (idx, arr) in images.items():
         out[f"img_{idx}"] = arr.astype(np.float32)
@@ -115,11 +123,12 @@ def parse(argv):
     ap.add_argument("--blend", required=True)
     ap.add_argument("--npz", required=True)
     ap.add_argument("--subsurf", type=int, default=None)
+    ap.add_argument("--with-ink", action="store_true")
     return ap.parse_args(argv)
 
 
 if __name__ == "__main__":
     a = parse(sys.argv)
-    data = gather(a.blend, subsurf=a.subsurf)
+    data = gather(a.blend, subsurf=a.subsurf, skip_ink=not a.with_ink)
     np.savez_compressed(a.npz, **data)
     print(f"[extract] {len(data['tris'])} triangles -> {a.npz}")
