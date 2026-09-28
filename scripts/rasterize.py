@@ -36,9 +36,9 @@ def basis(pos, target, fov, W, H, up=(0, 0, 1.0)):
     return pos, right, tup, fwd, f
 
 
-def zrender(proj, z, cols, shade, W, H, bg, keep):
-    """Accurate per-pixel z-buffer. Slower than PIL painter's algorithm but
-    correct where parts interpenetrate (shorts vs thighs)."""
+def zrender(proj, z, cols, shade, W, H, bg, keep, uvs=None, texids=None,
+            images=None):
+    """Accurate per-pixel z-buffer with optional texture sampling."""
     zbuf = np.full((H, W), 1e9)
     cbuf = np.zeros((H, W, 3))
     cbuf[:, :] = bg
@@ -71,8 +71,22 @@ def zrender(proj, z, cols, shade, W, H, bg, keep):
         if not hit.any():
             continue
         sub[hit] = depth[hit]
-        cbuf[y0:y1 + 1, x0:x1 + 1][hit] = np.clip(
-            cols[i] * shade[i] * 255, 0, 255)
+        base = np.array(cols[i], dtype=np.float64)
+        tid = int(texids[i]) if texids is not None else -1
+        if tid >= 0 and tid in images:
+            img = images[tid]
+            ih, iw = img.shape[:2]
+            uv = uvs[i]
+            U = w0 * uv[0, 0] + w1 * uv[1, 0] + w2 * uv[2, 0]
+            V = w0 * uv[0, 1] + w1 * uv[1, 1] + w2 * uv[2, 1]
+            ix = np.clip((U * iw).astype(np.int32), 0, iw - 1)
+            iy = np.clip(((1.0 - V) * ih).astype(np.int32), 0, ih - 1)
+            tex = img[iy, ix]
+            c = tex * shade[i] * 255.0
+        else:
+            c = base.reshape(1, 1, 3) * shade[i] * 255.0
+            c = np.broadcast_to(c, (y1 - y0 + 1, x1 - x0 + 1, 3))
+        cbuf[y0:y1 + 1, x0:x1 + 1][hit] = np.clip(c[hit], 0, 255)
     return cbuf.astype(np.uint8)
 
 
@@ -91,6 +105,11 @@ def main():
     d = np.load(a.npz)
     tris = d["tris"].astype(np.float64)
     cols = d["cols"].astype(np.float64)
+    uvs = d["uvs"].astype(np.float64) if "uvs" in d else None
+    texids = d["texids"] if "texids" in d else None
+    images = {int(k.split("_")[1]): d[k].astype(np.float64)
+              for k in d.files
+              if k.startswith("img_") and not k.startswith("imgname_")}
     W = H = a.size * a.ss
     pos, right, up, fwd, f = basis(*VIEWS[a.view], W, H)
 
@@ -120,7 +139,8 @@ def main():
     depth = z.mean(axis=1)
     if a.z:
         img = zrender(proj, z, cols, shade, W, H, (26, 26, 32),
-                      z.min(axis=1) > 0.02)
+                      z.min(axis=1) > 0.02, uvs=uvs, texids=texids,
+                      images=images)
         out_img = Image.fromarray(img)
         if a.ss > 1:
             out_img = out_img.resize((a.size, a.size), Image.LANCZOS)

@@ -694,10 +694,10 @@ def build_head(S, H, HD, LIPS, DARK):
     parts.append(ball("LipLower", (0, 0.116, 1.687), 0.021, LIPS, "head",
                       scale=(0.95, 0.30, 0.28), subsurf=1))
     # hair: bleached, medium length, swept up and back
-    parts.append(ball("Hair", (0, -0.018, 1.862), 0.126, H, "head",
-                      scale=(1.02, 1.03, 0.58), subsurf=2))
-    parts.append(ball("HairFront", (0, 0.052, 1.888), 0.082, H, "head",
-                      scale=(1.10, 0.90, 0.42), subsurf=2))
+    parts.append(ball("Hair", (0, -0.026, 1.852), 0.126, H, "head",
+                      scale=(1.03, 1.08, 0.56), subsurf=2))
+    parts.append(ball("HairFront", (0, 0.034, 1.878), 0.090, H, "head",
+                      scale=(1.06, 0.96, 0.40), subsurf=2))
     return parts
 
 
@@ -725,12 +725,12 @@ def build_body(S, H, HD, LIPS, SHADE, RED, WHITE, GOLD, DARK):
                           S, f"hand.{side}", scale=(1.0, 1.25, 0.82),
                           subsurf=1))
     # Muay Thai shorts: need to clear the glute bulge (y ~ -0.18)
-    trunk = ball("ShortsTrunk", (0, 0, 1.030), 0.252, RED, "spine",
+    trunk = ball("ShortsTrunk", (0, 0, 1.030), 0.258, RED, "spine",
                  scale=(1.0, 0.94, 0.74), subsurf=2)
     parts.append(shape_axis(trunk, [(0, 1.0), (0.5, 1.0), (1.0, 0.90)],
                             [(0, 1.04), (0.5, 1.0), (1.0, 0.88)]))
     for side, s in (("L", 1), ("R", -1)):
-        leg = cyl(f"ShortLeg.{side}", (s * 0.124, 0, 0.885), 0.142, 0.32,
+        leg = cyl(f"ShortLeg.{side}", (s * 0.124, 0, 0.885), 0.184, 0.32,
                   RED, f"thigh.{side}", subsurf=2, cuts=4)
         parts.append(profile(leg, [(0, 1.14), (0.45, 1.02), (1, 0.86)]))
     band = ball("Waistband", (0, 0, 1.192), 0.226, WHITE, "spine",
@@ -739,10 +739,59 @@ def build_body(S, H, HD, LIPS, SHADE, RED, WHITE, GOLD, DARK):
     return parts
 
 
-def build(do_dirt=False, skip_ink=False):
+def apply_face_texture(head, image_path, crop, bounds, min_front=0.55):
+    """Project a photo onto the front of the head.
+
+    Geometry alone cannot encode a specific person's face. This maps the
+    photo's face rectangle onto the head's front-facing polygons with a
+    planar projection; everything else keeps the plain skin material, so
+    no mirrored face wraps onto the back of the skull.
+    """
+    me = head.data
+    img = bpy.data.images.load(image_path)
+    w, h = img.size
+    x0, y0, x1, y1 = crop
+    xmin, xmax, zmin, zmax = bounds
+    face_mat = mat("FaceTex", (1, 1, 1), roughness=0.5)
+    nt = face_mat.node_tree
+    bsdf = nt.nodes.get("Principled BSDF")
+    tex = nt.nodes.new("ShaderNodeTexImage")
+    tex.image = img
+    nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+    me.materials.append(face_mat)
+    face_idx = len(me.materials) - 1
+    # the primitive already carries a spherical UV map; writing into it (or
+    # a second layer the renderer won't read) samples the wrong pixels.
+    while me.uv_layers:
+        me.uv_layers.remove(me.uv_layers[0])
+    uv = me.uv_layers.new(name="FaceUV")
+    me.uv_layers.active = uv
+    uvl = uv.data
+    mw = head.matrix_world
+    nfront = 0
+    for poly in me.polygons:
+        if poly.normal.y > min_front:
+            poly.material_index = face_idx
+            nfront += 1
+        for li in poly.loop_indices:
+            # WORLD coords: the head mesh is centred on the origin and its
+            # world position lives in the object transform
+            v = mw @ me.vertices[me.loops[li].vertex_index].co
+            u01 = min(max((v.x - xmin) / (xmax - xmin), 0.0), 1.0)
+            t01 = min(max((v.z - zmin) / (zmax - zmin), 0.0), 1.0)
+            px = x0 + u01 * (x1 - x0)
+            py = y1 - t01 * (y1 - y0)
+            uvl[li].uv = (px / w, 1.0 - py / h)
+    me.update()
+    print(f"[face] textured {nfront}/{len(me.polygons)} head polys "
+          f"from {image_path}")
+
+
+def build(do_dirt=False, skip_ink=False, face=None, face_crop=None,
+          face_bounds=None):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     S = mat("Skin", (0.87, 0.66, 0.53), roughness=0.55, subsurface=0.25)
-    H = mat("HairBleach", (0.86, 0.79, 0.60), roughness=0.85)
+    H = mat("HairBleach", (0.62, 0.55, 0.46), roughness=0.9)
     HD = mat("HairFade", (0.60, 0.56, 0.50), roughness=0.9)
     LIPS = mat("Lips", (0.45, 0.20, 0.18), roughness=0.6)
     SHADE = mat("SkinShade", (0.72, 0.52, 0.42), roughness=0.6)
@@ -757,6 +806,17 @@ def build(do_dirt=False, skip_ink=False):
     bind_body(body, arm)
     # accessories: head + features, wraps, shorts (rigid-bound)
     parts = [body] + build_body(S, H, HD, LIPS, SHADE, RED, WHITE, GOLD, DARK)
+    if face:
+        # the photo supplies eyes/brows/lips; drop the geometry versions
+        for name in ("Eye.L", "Eye.R", "Brow.L", "Brow.R",
+                     "LipUpper", "LipLower", "NoseBridge", "NoseTip",
+                     "NoseWing.L", "NoseWing.R"):
+            o = bpy.data.objects.get(name)
+            if o:
+                parts.remove(o)
+                bpy.data.objects.remove(o, do_unlink=True)
+        apply_face_texture(bpy.data.objects["Head"], face,
+                           face_crop, face_bounds)
     if do_dirt:
         # NOTE: bpy's vertex_color_dirt bakes very dark values on these
         # smooth meshes (~0.2 mean). glTF multiplies COLOR_0 into base
@@ -778,6 +838,12 @@ def parse_args(argv):
                    help="bake crevice shading (darkens! check values first)")
     p.add_argument("--skip-ink", action="store_true",
                    help="skip ink hulls (fast iteration)")
+    p.add_argument("--face", default=None,
+                   help="photo to project onto the front of the head")
+    p.add_argument("--face-crop", default="455,45,775,500",
+                   help="x0,y0,x1,y1 face rect in image pixels")
+    p.add_argument("--face-bounds", default="-0.115,0.115,1.615,1.930",
+                   help="xmin,xmax,zmin,zmax the rect maps onto")
     return p.parse_args(argv)
 
 
@@ -788,7 +854,10 @@ def main(argv):
     if bpy is None:
         raise RuntimeError("Run inside Blender: blender --background --python "
                            "scripts/build_human_tpose.py")
-    build(do_dirt=args.dirt, skip_ink=args.skip_ink)
+    crop = tuple(float(x) for x in args.face_crop.split(","))
+    bounds = tuple(float(x) for x in args.face_bounds.split(","))
+    build(do_dirt=args.dirt, skip_ink=args.skip_ink, face=args.face,
+          face_crop=crop, face_bounds=bounds)
     parts = [o for o in bpy.data.objects if o.type == "MESH"
              and not o.name.startswith("Ink_")]
     hulls = [o for o in bpy.data.objects if o.type == "MESH"
