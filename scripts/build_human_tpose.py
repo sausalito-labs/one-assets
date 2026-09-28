@@ -645,59 +645,52 @@ MUSCLE_BUMPS = [
 
 
 def build_head(S, H, HD, LIPS, DARK):
-    """Detailed head: skull sculpted with jaw/brow/cheek/nose mass, then
-    small feature parts. Overlaps the neck so there is no seam."""
+    """An actual head: sculpted cranium, brow ridge, eye sockets, cheekbones,
+    cheek hollows, jaw angle and chin. The photo is mapped onto the face
+    only; hair is sculpted in as volume and tinted from the photo."""
     parts = []
-    head = ball("Head", (0, 0.008, 1.735), 0.120, S, "head",
-                scale=(0.94, 1.02, 1.04), subsurf=2, seg=32, rings=24)
+    head = ball("Head", (0, 0.006, 1.735), 0.122, S, "head",
+                scale=(0.93, 1.00, 1.06), subsurf=2, seg=48, rings=32)
     sculpt(head, [
-        # flatten the face plane, keep the back round
-        ((0.000, 0.090, 1.720), (0.090, 0.060, 0.070), -0.016, (0, 1, 0), None),
-        # brow ridge
-        ((0.000, 0.095, 1.790), (0.085, 0.060, 0.022), 0.010, (0, 1, 0), None),
+        # forehead / brow ridge
+        ((0.000, 0.098, 1.806), (0.090, 0.060, 0.020), 0.012, (0, 1, 0), None),
+        # eye sockets recessed so the photo's eyes sit in a socket
+        ((0.047, 0.100, 1.766), (0.036, 0.060, 0.020), -0.009, (0, 1, 0), None),
+        ((-0.047, 0.100, 1.766), (0.036, 0.060, 0.020), -0.009, (0, 1, 0), None),
         # cheekbones
-        ((0.072, 0.070, 1.720), (0.045, 0.060, 0.045), 0.012, (0, 1, 0), None),
-        ((-0.072, 0.070, 1.720), (0.045, 0.060, 0.045), 0.012, (0, 1, 0), None),
+        ((0.079, 0.068, 1.732), (0.040, 0.060, 0.036), 0.014, (0, 1, 0), None),
+        ((-0.079, 0.068, 1.732), (0.040, 0.060, 0.036), 0.014, (0, 1, 0), None),
+        # cheek hollows
+        ((0.068, 0.082, 1.688), (0.030, 0.060, 0.026), -0.008, (0, 1, 0), None),
+        ((-0.068, 0.082, 1.688), (0.030, 0.060, 0.026), -0.008, (0, 1, 0), None),
         # jaw + chin
-        ((0.000, 0.060, 1.650), (0.075, 0.060, 0.045), 0.014, (0, 1, 0), None),
-        ((0.000, 0.070, 1.628), (0.040, 0.060, 0.030), 0.010, (0, 1, 0), None),
-        # narrow the jaw at the sides
-        ((0.086, 0.000, 1.650), (0.030, 0.080, 0.050), -0.016, (1, 0, 0), (0, 1)),
-        ((-0.086, 0.000, 1.650), (0.030, 0.080, 0.050), -0.016, (-1, 0, 0), (0, -1)),
-        # back of skull tuck
-        ((0.000, -0.095, 1.760), (0.070, 0.050, 0.070), -0.012, (0, -1, 0), None),
+        ((0.000, 0.072, 1.664), (0.078, 0.060, 0.038), 0.013, (0, 1, 0), None),
+        ((0.000, 0.084, 1.634), (0.040, 0.060, 0.026), 0.011, (0, 1, 0), None),
+        # jaw tapers in at the sides
+        ((0.092, 0.000, 1.668), (0.028, 0.090, 0.052), -0.020, (1, 0, 0), (0, 1)),
+        ((-0.092, 0.000, 1.668), (0.028, 0.090, 0.052), -0.020, (-1, 0, 0), (0, -1)),
+        # temple flattening
+        ((0.098, 0.030, 1.786), (0.030, 0.070, 0.050), -0.010, (1, 0, 0), (0, 1)),
+        ((-0.098, 0.030, 1.786), (0.030, 0.070, 0.050), -0.010, (-1, 0, 0), (0, -1)),
+        # hair mass: volume up top and swept back
+        ((0.000, -0.010, 1.848), (0.135, 0.135, 0.062), 0.026, (0, 0, 1), None),
+        ((0.000, -0.090, 1.800), (0.125, 0.075, 0.072), 0.016, (0, -1, 0), None),
+        ((0.000, 0.060, 1.858), (0.110, 0.070, 0.040), 0.012, (0, 0, 1), None),
     ])
     parts.append(head)
-    parts.append(ball("NoseBridge", (0, 0.108, 1.740), 0.017, S, "head",
-                      scale=(0.80, 0.95, 1.55), subsurf=1))
-    parts.append(ball("NoseTip", (0, 0.122, 1.706), 0.021, S, "head",
-                      scale=(1.05, 0.95, 0.85), subsurf=1))
-    parts.append(ball("NoseWing.L", (0.019, 0.114, 1.704), 0.014, S, "head",
-                      scale=(1.0, 0.85, 0.85), subsurf=1))
-    parts.append(ball("NoseWing.R", (-0.019, 0.114, 1.704), 0.014, S, "head",
-                      scale=(1.0, 0.85, 0.85), subsurf=1))
-    parts.append(ball("Ear.L", (0.105, -0.004, 1.740), 0.030, S, "head",
-                      scale=(0.42, 0.78, 1.08), subsurf=1))
-    parts.append(ball("Ear.R", (-0.105, -0.004, 1.740), 0.030, S, "head",
-                      scale=(0.42, 0.78, 1.08), subsurf=1))
-    # almond eyes, straight dark brows
-    parts.append(ball("Eye.L", (0.046, 0.110, 1.768), 0.017, DARK, "head",
-                      scale=(1.25, 0.78, 0.54)))
-    parts.append(ball("Eye.R", (-0.046, 0.110, 1.768), 0.017, DARK, "head",
-                      scale=(1.25, 0.78, 0.54)))
-    parts.append(cube("Brow.L", (0.055, 0.112, 1.798), (0.027, 0.008, 0.005),
-                      DARK, "head", subsurf=1))
-    parts.append(cube("Brow.R", (-0.055, 0.112, 1.798), (0.027, 0.008, 0.005),
-                      DARK, "head", subsurf=1))
-    parts.append(ball("LipUpper", (0, 0.118, 1.694), 0.026, LIPS, "head",
-                      scale=(1.05, 0.30, 0.24), subsurf=1))
-    parts.append(ball("LipLower", (0, 0.116, 1.687), 0.021, LIPS, "head",
-                      scale=(0.95, 0.30, 0.28), subsurf=1))
-    # hair: bleached, medium length, swept up and back
-    parts.append(ball("Hair", (0, -0.026, 1.852), 0.126, H, "head",
-                      scale=(1.03, 1.08, 0.56), subsurf=2))
-    parts.append(ball("HairFront", (0, 0.034, 1.878), 0.090, H, "head",
-                      scale=(1.06, 0.96, 0.40), subsurf=2))
+    # small nose so the profile works; the photo paints the front
+    parts.append(ball("NoseBridge", (0, 0.117, 1.752), 0.014, S, "head",
+                      scale=(0.85, 0.95, 1.40), subsurf=1))
+    parts.append(ball("NoseTip", (0, 0.128, 1.712), 0.018, S, "head",
+                      scale=(1.05, 0.92, 0.85), subsurf=1))
+    parts.append(ball("NoseWing.L", (0.016, 0.120, 1.708), 0.012, S, "head",
+                      scale=(1.00, 0.85, 0.80), subsurf=1))
+    parts.append(ball("NoseWing.R", (-0.016, 0.120, 1.708), 0.012, S, "head",
+                      scale=(1.00, 0.85, 0.80), subsurf=1))
+    parts.append(ball("Ear.L", (0.104, -0.004, 1.735), 0.029, S, "head",
+                      scale=(0.40, 0.75, 1.05), subsurf=1))
+    parts.append(ball("Ear.R", (-0.104, -0.004, 1.735), 0.029, S, "head",
+                      scale=(0.40, 0.75, 1.05), subsurf=1))
     return parts
 
 
@@ -780,6 +773,13 @@ def apply_face_texture(head, image_path, crop, bounds, min_front=0.05):
         if np.array_equal(grown, seeded):
             break
         seeded = grown
+    for _ in range(3):                       # dilate -> soft fringe
+        grown = seeded.copy()
+        grown[1:] |= seeded[:-1]
+        grown[:-1] |= seeded[1:]
+        grown[:, 1:] |= seeded[:, :-1]
+        grown[:, :-1] |= seeded[:, 1:]
+        seeded = grown
     crop_px[seeded, :3] = skin
     # hair colour straight from the photo (top band of the crop)
     hairband = crop_px[: max(4, ch // 9), :, :3].reshape(-1, 3)
@@ -815,17 +815,30 @@ def apply_face_texture(head, image_path, crop, bounds, min_front=0.05):
     uvl = uv.data
     xmin, xmax, zmin, zmax = bounds
     mw = head.matrix_world
+    hair_z = zmin + (zmax - zmin) * 0.80          # hairline height
+    # a patch of pure hair in the photo, for the back/top of the skull
+    hair_u0, hair_u1 = 0.34, 0.50
+    hair_v0, hair_v1 = 0.86, 0.97
     nfront = 0
     for poly in me.polygons:
-        if poly.normal.y > min_front:
+        c = mw @ poly.center
+        front = poly.normal.y > min_front
+        upper = c.z > hair_z
+        if front or upper:
             poly.material_index = face_idx
             nfront += 1
         for li in poly.loop_indices:
             v = mw @ me.vertices[me.loops[li].vertex_index].co
-            u01 = (v.x - xmin) / (xmax - xmin)
-            t01 = (v.z - zmin) / (zmax - zmin)
-            cx = pad + u01 * cw
-            cy = pad + t01 * ch                    # bottom-up
+            if front:
+                u01 = (v.x - xmin) / (xmax - xmin)
+                t01 = (v.z - zmin) / (zmax - zmin)
+                cx = pad + min(max(u01, -0.2), 1.2) * cw
+                cy = pad + min(max(t01, -0.2), 1.2) * ch
+            else:
+                # back of the skull: sample hair only, no face features
+                fu = 0.5 + 0.5 * (v.x / max(xmax, 1e-6))
+                cx = (hair_u0 + (hair_u1 - hair_u0) * fu) * nw
+                cy = (hair_v0 + (hair_v1 - hair_v0) * 0.5) * nh
             uvl[li].uv = (cx / nw, cy / nh)
     me.update()
     print(f"[face] textured {nfront}/{len(me.polygons)} head polys; "
