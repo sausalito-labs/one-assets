@@ -83,7 +83,7 @@ def main():
     ap.add_argument("--view", default="threeq", choices=sorted(VIEWS))
     ap.add_argument("--size", type=int, default=560)
     ap.add_argument("--ss", type=int, default=2, help="supersample factor")
-    ap.add_argument("--ambient", type=float, default=0.55)
+    ap.add_argument("--ambient", type=float, default=0.34)
     ap.add_argument("--z", action="store_true",
                     help="accurate z-buffer (slow) instead of painter's")
     a = ap.parse_args()

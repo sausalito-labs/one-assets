@@ -318,15 +318,27 @@ def apply_dirt(parts):
                 pass
 
 
-def build_ink(parts):
-    """Inverted-hull ink outlines, SFIV style. Hulls copy the part's
-    armature bind so they follow poses. They carry NO slicer-facing
-    role: excluded from the FBX (game) export by selection, included in
-    the GLB (web demo) where the viewer renders them BackSide.
+def _copy_vgroups(src, dst):
+    for vg in src.vertex_groups:
+        if vg.name not in dst.vertex_groups:
+            dst.vertex_groups.new(name=vg.name)
+    for v in src.data.vertices:
+        for g in v.groups:
+            name = src.vertex_groups[g.group].name
+            dst.vertex_groups[name].add([v.index], g.weight, "REPLACE")
+
+
+def build_ink(parts, thickness=0.011):
+    """Inverted-hull ink outlines, SFIV style.
+
+    Offset each hull along its own vertex normals (not object scale, which
+    would vary with distance from the origin on a full body), flip the
+    normals, and copy skin weights so hulls follow poses. The hull carries
+    no slicer-facing role: excluded from the FBX export, included in the
+    GLB where the viewer draws it BackSide.
     """
+    import numpy as np
     ink_mat = mat("Ink", (0.015, 0.015, 0.02), roughness=1.0)
-    # cull the hull's outer faces: with flipped normals this leaves only
-    # the inner far-side shell visible = classic outline rim
     ink_mat.use_backface_culling = True
     arm = bpy.data.objects["FighterArmature"]
     hulls = []
@@ -336,32 +348,31 @@ def build_ink(parts):
         h.data = o.data.copy()
         h.name = "Ink_" + o.name
         bpy.context.collection.objects.link(h)
-        while h.vertex_groups:
-            h.vertex_groups.remove(h.vertex_groups[0])
+        me = h.data
+        n = len(me.vertices)
+        if n:
+            co = np.empty(n * 3, dtype=np.float64)
+            me.vertices.foreach_get("co", co)
+            nrm = _vertex_normals(me)
+            co = co.reshape(-1, 3) + nrm * thickness
+            me.vertices.foreach_set("co", co.ravel())
+            me.update()
         for m in h.modifiers:
             if m.type == "SUBSURF":
                 m.levels = 1
                 m.render_levels = 1
-            elif m.type == "ARMATURE":
-                m.object = arm
         if not any(m.type == "ARMATURE" for m in h.modifiers):
             mod = h.modifiers.new("ArmatureBind", "ARMATURE")
             mod.object = arm
-        h.select_set(True)
+        _copy_vgroups(o, h)
         bpy.context.view_layer.objects.active = h
         bpy.ops.object.mode_set(mode="EDIT")
         bpy.ops.mesh.select_all(action="SELECT")
         bpy.ops.mesh.flip_normals()
         bpy.ops.object.mode_set(mode="OBJECT")
-        h.select_set(False)
-        vg = h.vertex_groups.new(name=o.vertex_groups[0].name)
-        vg.add(list(range(len(h.data.vertices))), 1.0, "REPLACE")
         h.data.materials.clear()
         h.data.materials.append(ink_mat)
-        sc = h.scale
-        h.scale = (sc[0] * 1.03, sc[1] * 1.03, sc[2] * 1.03)
-        # stills default to Freestyle lines (see preview.py); hulls serve
-        # the realtime GLB where the viewer draws them BackSide
+        # stills use Freestyle lines instead (preview.py)
         h.hide_render = True
         hulls.append(h)
     return hulls
@@ -392,178 +403,344 @@ def build_armature():
 
 
 # ---------------------------------------------------------------- body
-def build_body(S, H, HD, LIPS, SHADE, RED, WHITE, GOLD, DARK):
-    X90 = (0, math.radians(90), 0)  # cylinder Z-axis -> X-axis (arms)
+# Continuous body via the Skin modifier: a stick figure with per-vertex
+# elliptical radii, skinned + subdivided into ONE manifold mesh. This is
+# what kills the "turned on a lathe" look - real junctions instead of
+# stacked primitives - and it still slices fine for the game because
+# render_fighter_parts.py works off vertex groups, not separate objects.
+BODY_SKELETON = [
+    # (x, y, z, radius_x, radius_y) in metres, T-pose
+    (0.000, 0.000, 0.985, 0.150, 0.105),   # 0 pelvis
+    (0.000, 0.000, 1.150, 0.130, 0.097),   # 1 belly
+    (0.000, 0.000, 1.330, 0.150, 0.103),   # 2 lower chest
+    (0.000, 0.000, 1.455, 0.192, 0.112),   # 3 upper chest
+    (0.000, 0.000, 1.560, 0.078, 0.072),   # 4 neck base
+    (0.000, 0.000, 1.640, 0.064, 0.062),   # 5 neck top
+    # left arm
+    (0.185, 0.000, 1.495, 0.096, 0.096),   # 6 shoulder
+    (0.270, 0.000, 1.490, 0.106, 0.100),   # 7 deltoid
+    (0.370, 0.000, 1.490, 0.086, 0.081),   # 8 bicep
+    (0.490, 0.000, 1.490, 0.064, 0.063),   # 9 elbow
+    (0.600, 0.000, 1.490, 0.072, 0.066),   # 10 forearm
+    (0.735, 0.000, 1.490, 0.049, 0.047),   # 11 wrist
+    (0.845, 0.000, 1.490, 0.072, 0.064),   # 12 fist
+    # right arm
+    (-0.185, 0.000, 1.495, 0.096, 0.096),
+    (-0.270, 0.000, 1.490, 0.106, 0.100),
+    (-0.370, 0.000, 1.490, 0.086, 0.081),
+    (-0.490, 0.000, 1.490, 0.064, 0.063),
+    (-0.600, 0.000, 1.490, 0.072, 0.066),
+    (-0.735, 0.000, 1.490, 0.049, 0.047),
+    (-0.845, 0.000, 1.490, 0.072, 0.064),
+    # left leg
+    (0.115, 0.000, 0.985, 0.120, 0.114),
+    (0.115, 0.000, 0.800, 0.124, 0.117),
+    (0.115, 0.000, 0.610, 0.092, 0.090),
+    (0.115, 0.000, 0.530, 0.082, 0.082),
+    (0.115, 0.000, 0.380, 0.083, 0.078),
+    (0.115, 0.000, 0.130, 0.056, 0.055),
+    (0.115, 0.055, 0.062, 0.052, 0.072),   # foot
+    # right leg
+    (-0.115, 0.000, 0.985, 0.118, 0.112),
+    (-0.115, 0.000, 0.800, 0.120, 0.113),
+    (-0.115, 0.000, 0.610, 0.092, 0.090),
+    (-0.115, 0.000, 0.530, 0.082, 0.082),
+    (-0.115, 0.000, 0.380, 0.083, 0.078),
+    (-0.115, 0.000, 0.130, 0.056, 0.055),
+    (-0.115, 0.055, 0.062, 0.052, 0.072),
+]
+BODY_EDGES = [
+    (0, 1), (1, 2), (2, 3), (3, 4), (4, 5),
+    (3, 6), (6, 7), (7, 8), (8, 9), (9, 10), (10, 11), (11, 12),
+    (3, 13), (13, 14), (14, 15), (15, 16), (16, 17), (17, 18), (18, 19),
+    (0, 20), (20, 21), (21, 22), (22, 23), (23, 24), (24, 25), (25, 26),
+    (0, 27), (27, 28), (28, 29), (29, 30), (30, 31), (31, 32), (32, 33),
+]
+
+
+def build_continuous_body(S, material):
+    me = bpy.data.meshes.new("Body")
+    obj = bpy.data.objects.new("Body", me)
+    bpy.context.collection.objects.link(obj)
+    import bmesh
+    bm = bmesh.new()
+    vs = [bm.verts.new((v[0], v[1], v[2])) for v in BODY_SKELETON]
+    bm.verts.ensure_lookup_table()
+    for a, b in BODY_EDGES:
+        bm.edges.new((vs[a], vs[b]))
+    bm.to_mesh(me)
+    bm.free()
+    obj.modifiers.new("Skin", "SKIN")
+    for i, v in enumerate(BODY_SKELETON):
+        sv = me.skin_vertices[0].data[i]
+        sv.radius = (v[3], v[4])
+    me.skin_vertices[0].data[0].use_root = True
+    sub = obj.modifiers.new("Sub", "SUBSURF")
+    sub.levels = 4
+    sub.render_levels = 4
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.modifier_apply(modifier="Skin")
+    bpy.ops.object.modifier_apply(modifier="Sub")
+    for p in obj.data.polygons:
+        p.use_smooth = True
+    obj.data.materials.append(material)
+    sculpt_normals(obj, MUSCLE_BUMPS)
+    return obj
+
+
+def bind_body(obj, arm):
+    """Skin the continuous body to the armature (bone-heat weights, with a
+    distance fallback)."""
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    arm.select_set(True)
+    bpy.context.view_layer.objects.active = arm
+    try:
+        bpy.ops.object.parent_set(type="ARMATURE_AUTO")
+        print("[build] body bound with bone-heat weights")
+    except Exception as e:  # noqa: BLE001
+        print(f"[build] auto weights failed ({e}); falling back")
+        obj.parent = arm
+        mod = obj.modifiers.new("ArmatureBind", "ARMATURE")
+        mod.object = arm
+        _distance_weights(obj, arm)
+
+
+def _distance_weights(obj, arm, k=2, power=4.0):
+    from mathutils import Vector
+
+    def seg_dist(p, a, b):
+        ab = b - a
+        t = max(0.0, min(1.0, (p - a).dot(ab) / max(ab.length_squared, 1e-9)))
+        return (p - (a + ab * t)).length
+
+    bones = [(b.name, Vector(b.head_local), Vector(b.tail_local))
+             for b in arm.data.bones]
+    groups = {name: obj.vertex_groups.new(name=name) for name, _, _ in bones}
+    for v in obj.data.vertices:
+        p = Vector(v.co)
+        ds = sorted(((seg_dist(p, h, t), n) for n, h, t in bones))[:k]
+        ws = [(n, 1.0 / max(d, 1e-4) ** power) for d, n in ds]
+        tot = sum(w for _, w in ws)
+        for n, w in ws:
+            groups[n].add([v.index], w / tot, "REPLACE")
+
+
+def _vertex_normals(me):
+    """Per-vertex normals averaged from polygons.
+
+    mesh.vertex_normals.foreach_get() is unreliable on a mesh that was
+    just written by modifier_apply, so compute them directly.
+    """
+    import numpy as np
+    n = len(me.vertices)
+    acc = np.zeros((n, 3), dtype=np.float64)
+    pn = np.empty(len(me.polygons) * 3, dtype=np.float64)
+    me.polygons.foreach_get("normal", pn)
+    pn = pn.reshape(-1, 3)
+    for i, p in enumerate(me.polygons):
+        nv = pn[i]
+        for v in p.vertices:
+            acc[v] += nv
+    ln = np.linalg.norm(acc, axis=1, keepdims=True)
+    ln[ln == 0] = 1.0
+    return acc / ln
+
+
+def sculpt_normals(obj, bumps):
+    """Muscle bulges that push along the surface normal.
+
+    bumps: (center, (sigma_x, sigma_z), amp, direction). A vertex is
+    affected if it lies in the muscle's x/z region AND faces the given
+    direction, then moves out along its own normal. This is what makes a
+    rounded belly of muscle instead of a flat slab - the failure mode of
+    a plain y-gaussian on a curved surface.
+    """
+    import numpy as np
+    me = obj.data
+    mw = np.array(obj.matrix_world)
+    n = len(me.vertices)
+    co = np.empty(n * 3, dtype=np.float64)
+    me.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3)
+    nr = _vertex_normals(me)
+    wco = co @ mw[:3, :3].T + mw[:3, 3]
+    nrm_mat = np.linalg.inv(mw[:3, :3]).T
+    wn = nr @ nrm_mat.T
+    wn /= np.maximum(np.linalg.norm(wn, axis=1, keepdims=True), 1e-9)
+    inv = np.linalg.inv(mw[:3, :3])
+    disp = np.zeros_like(co)
+    for center, sigma, amp, direction in bumps:
+        d = np.array(direction, float)
+        d /= np.linalg.norm(d)
+        w = np.exp(-(((wco[:, 0] - center[0]) / sigma[0]) ** 2
+                     + ((wco[:, 2] - center[2]) / sigma[1]) ** 2))
+        face = np.clip(wn @ d, 0.0, 1.0)
+        w = w * face
+        disp += (wn * (w * amp)[:, None]) @ inv.T
+    mag = np.linalg.norm(disp, axis=1)
+    print(f"[sculpt] {obj.name}: verts={n} max_disp={mag.max():.4f} "
+          f"mean_disp={mag.mean():.4f} normal_ok={np.isfinite(wn).all()}")
+    me.vertices.foreach_set("co", (co + disp).ravel())
+    me.update()
+    return obj
+
+
+front_v = (0, 1, 0)
+back_v = (0, -1, 0)
+left_v = (1, 0, 0)
+right_v = (-1, 0, 0)
+
+# (center, (sigma_x, sigma_z), amplitude, facing direction)
+MUSCLE_BUMPS = [
+    # ---- chest ----
+    ((0.098, 0, 1.452), (0.080, 0.060), 0.072, front_v),      # pec L
+    ((-0.098, 0, 1.452), (0.080, 0.060), 0.072, front_v),     # pec R
+    ((0.000, 0, 1.448), (0.014, 0.078), -0.052, front_v),     # sternum
+    # ---- abs: 3 rows, with grooves between ----
+    ((0.050, 0, 1.322), (0.032, 0.030), 0.056, front_v),
+    ((-0.050, 0, 1.322), (0.032, 0.030), 0.056, front_v),
+    ((0.050, 0, 1.242), (0.032, 0.030), 0.053, front_v),
+    ((-0.050, 0, 1.242), (0.032, 0.030), 0.053, front_v),
+    ((0.050, 0, 1.165), (0.032, 0.029), 0.045, front_v),
+    ((-0.050, 0, 1.165), (0.032, 0.029), 0.045, front_v),
+    ((0.000, 0, 1.245), (0.010, 0.100), -0.042, front_v),     # linea alba
+    ((0.000, 0, 1.283), (0.062, 0.011), -0.040, front_v),     # ab groove
+    ((0.000, 0, 1.203), (0.062, 0.011), -0.040, front_v),     # ab groove
+    # ---- obliques / serratus ----
+    ((0.126, 0.015, 1.230), (0.026, 0.075), 0.028, front_v),
+    ((-0.126, 0.015, 1.230), (0.026, 0.075), 0.028, front_v),
+    # ---- lats: widen the upper torso ----
+    ((0.176, 0, 1.360), (0.050, 0.135), 0.062, left_v),
+    ((-0.176, 0, 1.360), (0.050, 0.135), 0.062, right_v),
+    # ---- back ----
+    ((0.000, 0, 1.330), (0.014, 0.190), -0.030, back_v),      # spine groove
+    ((0.086, 0, 1.518), (0.056, 0.054), 0.050, back_v),       # trap L
+    ((-0.086, 0, 1.518), (0.056, 0.054), 0.050, back_v),      # trap R
+    ((0.070, 0, 1.330), (0.045, 0.090), 0.030, back_v),       # lat back L
+    ((-0.070, 0, 1.330), (0.045, 0.090), 0.030, back_v),      # lat back R
+    ((0.105, 0, 0.975), (0.072, 0.080), 0.066, back_v),       # glute L
+    ((-0.105, 0, 0.975), (0.072, 0.080), 0.066, back_v),      # glute R
+    # ---- arms ----
+    ((0.272, 0, 1.492), (0.062, 0.072), 0.060, left_v),       # delt L (out)
+    ((-0.272, 0, 1.492), (0.062, 0.072), 0.060, right_v),     # delt R
+    ((0.272, 0, 1.510), (0.060, 0.055), 0.026, back_v),       # rear delt L
+    ((-0.272, 0, 1.510), (0.060, 0.055), 0.026, back_v),
+    ((0.372, 0, 1.492), (0.082, 0.050), 0.064, front_v),      # bicep L
+    ((-0.372, 0, 1.492), (0.082, 0.050), 0.064, front_v),     # bicep R
+    ((0.382, 0, 1.492), (0.086, 0.054), 0.046, back_v),       # tricep L
+    ((-0.382, 0, 1.492), (0.086, 0.054), 0.046, back_v),      # tricep R
+    ((0.600, 0, 1.492), (0.050, 0.046), 0.024, front_v),      # brachio L
+    ((-0.600, 0, 1.492), (0.050, 0.046), 0.024, front_v),
+    # ---- legs ----
+    ((0.115, 0, 0.805), (0.084, 0.112), 0.068, front_v),      # quad L
+    ((-0.115, 0, 0.805), (0.084, 0.112), 0.068, front_v),     # quad R
+    ((0.115, 0, 0.820), (0.078, 0.104), 0.046, back_v),       # ham L
+    ((-0.115, 0, 0.820), (0.078, 0.104), 0.046, back_v),      # ham R
+    ((0.118, 0, 0.392), (0.056, 0.086), 0.064, back_v),       # calf L
+    ((-0.118, 0, 0.392), (0.056, 0.086), 0.064, back_v),      # calf R
+    ((0.115, 0, 0.300), (0.050, 0.095), 0.018, front_v),      # shin L
+    ((-0.115, 0, 0.300), (0.050, 0.095), 0.018, front_v),     # shin R
+]
+
+
+def build_head(S, H, HD, LIPS, DARK):
+    """Detailed head: skull sculpted with jaw/brow/cheek/nose mass, then
+    small feature parts. Overlaps the neck so there is no seam."""
     parts = []
-    # ---- torso: one smooth mesh, muscles sculpted in ----
-    torso = ball("Torso", (0, 0, 1.245), 0.205, S, "spine",
-                 scale=(1.0, 0.74, 1.45), subsurf=2, seg=32, rings=24)
-    shape_axis(torso,
-               [(0, 0.92), (0.22, 0.82), (0.46, 0.78), (0.66, 0.95),
-                (0.86, 1.12), (1.0, 1.16)],
-               [(0, 1.00), (0.25, 0.86), (0.5, 0.82), (0.78, 0.98), (1.0, 1.00)])
-    front = (1, 1)
-    back = (1, -1)
-    bumps = [
-        # pectorals + sternum groove
-        ((0.100, 0, 1.400), (0.086, 0.60, 0.088), 0.038, (0, 1, 0), front),
-        ((-0.100, 0, 1.400), (0.086, 0.60, 0.088), 0.038, (0, 1, 0), front),
-        ((0.000, 0, 1.395), (0.024, 0.60, 0.115), -0.026, (0, 1, 0), front),
-        # six-pack + linea alba
-        ((0.052, 0, 1.325), (0.038, 0.60, 0.042), 0.026, (0, 1, 0), front),
-        ((-0.052, 0, 1.325), (0.038, 0.60, 0.042), 0.026, (0, 1, 0), front),
-        ((0.052, 0, 1.245), (0.038, 0.60, 0.042), 0.024, (0, 1, 0), front),
-        ((-0.052, 0, 1.245), (0.038, 0.60, 0.042), 0.024, (0, 1, 0), front),
-        ((0.052, 0, 1.168), (0.038, 0.60, 0.040), 0.020, (0, 1, 0), front),
-        ((-0.052, 0, 1.168), (0.038, 0.60, 0.040), 0.020, (0, 1, 0), front),
-        ((0.000, 0, 1.245), (0.015, 0.60, 0.130), -0.020, (0, 1, 0), front),
-        # lat flare
-        ((0.185, 0, 1.350), (0.060, 0.60, 0.160), 0.019, (1, 0, 0), (0, 1)),
-        ((-0.185, 0, 1.350), (0.060, 0.60, 0.160), 0.019, (-1, 0, 0), (0, -1)),
-        # spine groove
-        ((0.000, 0, 1.330), (0.024, 0.60, 0.220), 0.022, (0, 1, 0), back),
-    ]
-    parts.append(sculpt(torso, bumps))
-    # hips / glutes, bridging into the thighs
-    hip = ball("Pelvis", (0, 0, 1.020), 0.170, S, "spine",
-               scale=(1.0, 0.74, 0.74), subsurf=2)
-    parts.append(shape_axis(hip,
-                            [(0, 0.90), (0.35, 1.0), (1.0, 0.98)],
-                            [(0, 0.94), (0.4, 1.06), (1.0, 0.98)]))
-    # neck + traps
-    neck = cyl("Neck", (0, 0, 1.540), 0.082, 0.14, S, "neck", subsurf=2,
-               cuts=3)
-    parts.append(profile(neck, [(0, 1.20), (0.5, 1.08), (1, 0.98)]))
-    parts.append(ball("Trap.L", (0.128, -0.012, 1.504), 0.100, S, "chest",
-                      scale=(1.42, 0.90, 0.56), subsurf=2))
-    parts.append(ball("Trap.R", (-0.128, -0.012, 1.504), 0.100, S, "chest",
-                      scale=(1.42, 0.90, 0.56), subsurf=2))
-    # ---- head ----
-    head = ball("Head", (0, 0.006, 1.700), 0.134, S, "head",
-                scale=(0.92, 1.02, 1.05), subsurf=2, seg=32, rings=24)
-    parts.append(shape_head(head))
-    parts.append(ball("NoseBridge", (0, 0.128, 1.696), 0.020, S, "head",
-                      scale=(0.74, 0.90, 1.50), subsurf=1))
-    parts.append(ball("NoseTip", (0, 0.132, 1.660), 0.024, S, "head",
-                      scale=(1.05, 0.90, 0.88), subsurf=1))
-    parts.append(ball("NoseWing.L", (0.022, 0.122, 1.658), 0.016, S, "head",
+    head = ball("Head", (0, 0.008, 1.735), 0.120, S, "head",
+                scale=(0.94, 1.02, 1.04), subsurf=2, seg=32, rings=24)
+    sculpt(head, [
+        # flatten the face plane, keep the back round
+        ((0.000, 0.090, 1.720), (0.090, 0.060, 0.070), -0.016, (0, 1, 0), None),
+        # brow ridge
+        ((0.000, 0.095, 1.790), (0.085, 0.060, 0.022), 0.010, (0, 1, 0), None),
+        # cheekbones
+        ((0.072, 0.070, 1.720), (0.045, 0.060, 0.045), 0.012, (0, 1, 0), None),
+        ((-0.072, 0.070, 1.720), (0.045, 0.060, 0.045), 0.012, (0, 1, 0), None),
+        # jaw + chin
+        ((0.000, 0.060, 1.650), (0.075, 0.060, 0.045), 0.014, (0, 1, 0), None),
+        ((0.000, 0.070, 1.628), (0.040, 0.060, 0.030), 0.010, (0, 1, 0), None),
+        # narrow the jaw at the sides
+        ((0.086, 0.000, 1.650), (0.030, 0.080, 0.050), -0.016, (1, 0, 0), (0, 1)),
+        ((-0.086, 0.000, 1.650), (0.030, 0.080, 0.050), -0.016, (-1, 0, 0), (0, -1)),
+        # back of skull tuck
+        ((0.000, -0.095, 1.760), (0.070, 0.050, 0.070), -0.012, (0, -1, 0), None),
+    ])
+    parts.append(head)
+    parts.append(ball("NoseBridge", (0, 0.108, 1.740), 0.017, S, "head",
+                      scale=(0.80, 0.95, 1.55), subsurf=1))
+    parts.append(ball("NoseTip", (0, 0.122, 1.706), 0.021, S, "head",
+                      scale=(1.05, 0.95, 0.85), subsurf=1))
+    parts.append(ball("NoseWing.L", (0.019, 0.114, 1.704), 0.014, S, "head",
                       scale=(1.0, 0.85, 0.85), subsurf=1))
-    parts.append(ball("NoseWing.R", (-0.022, 0.122, 1.658), 0.016, S, "head",
+    parts.append(ball("NoseWing.R", (-0.019, 0.114, 1.704), 0.014, S, "head",
                       scale=(1.0, 0.85, 0.85), subsurf=1))
-    parts.append(ball("Ear.L", (0.111, -0.006, 1.695), 0.032, S, "head",
-                      scale=(0.44, 0.80, 1.10), subsurf=1))
-    parts.append(ball("Ear.R", (-0.111, -0.006, 1.695), 0.032, S, "head",
-                      scale=(0.44, 0.80, 1.10), subsurf=1))
-    parts.append(ball("Eye.L", (0.049, 0.124, 1.724), 0.020, DARK, "head",
-                      scale=(1.30, 0.85, 0.58)))
-    parts.append(ball("Eye.R", (-0.049, 0.124, 1.724), 0.020, DARK, "head",
-                      scale=(1.30, 0.85, 0.58)))
-    parts.append(cube("Brow.L", (0.058, 0.124, 1.752), (0.030, 0.009, 0.007),
+    parts.append(ball("Ear.L", (0.105, -0.004, 1.740), 0.030, S, "head",
+                      scale=(0.42, 0.78, 1.08), subsurf=1))
+    parts.append(ball("Ear.R", (-0.105, -0.004, 1.740), 0.030, S, "head",
+                      scale=(0.42, 0.78, 1.08), subsurf=1))
+    # almond eyes, straight dark brows
+    parts.append(ball("Eye.L", (0.046, 0.110, 1.768), 0.019, DARK, "head",
+                      scale=(1.30, 0.80, 0.56)))
+    parts.append(ball("Eye.R", (-0.046, 0.110, 1.768), 0.019, DARK, "head",
+                      scale=(1.30, 0.80, 0.56)))
+    parts.append(cube("Brow.L", (0.055, 0.112, 1.798), (0.029, 0.009, 0.006),
                       DARK, "head", subsurf=1))
-    parts.append(cube("Brow.R", (-0.058, 0.124, 1.752), (0.030, 0.009, 0.007),
+    parts.append(cube("Brow.R", (-0.055, 0.112, 1.798), (0.029, 0.009, 0.006),
                       DARK, "head", subsurf=1))
-    parts.append(ball("LipUpper", (0, 0.126, 1.646), 0.028, LIPS, "head",
-                      scale=(1.05, 0.32, 0.26), subsurf=1))
-    parts.append(ball("LipLower", (0, 0.124, 1.638), 0.022, LIPS, "head",
-                      scale=(0.95, 0.32, 0.30), subsurf=1))
-    # bleached crop sitting ON the skull, clear of the brow
-    parts.append(ball("Hair", (0, -0.016, 1.802), 0.128, H, "head",
+    parts.append(ball("LipUpper", (0, 0.118, 1.694), 0.026, LIPS, "head",
+                      scale=(1.05, 0.30, 0.24), subsurf=1))
+    parts.append(ball("LipLower", (0, 0.116, 1.687), 0.021, LIPS, "head",
+                      scale=(0.95, 0.30, 0.28), subsurf=1))
+    # bleached crop on top of the skull
+    parts.append(ball("Hair", (0, -0.014, 1.836), 0.120, H, "head",
                       scale=(1.02, 1.01, 0.54), subsurf=2))
     for i, (fx, fz, fw) in enumerate((
-            (-0.070, 1.774, 0.026), (-0.026, 1.782, 0.030),
-            (0.026, 1.780, 0.030), (0.070, 1.772, 0.026))):
-        parts.append(cube(f"HairFringe.{i}", (fx, 0.098, fz),
-                          (fw, 0.026, 0.040), H, "head", subsurf=1))
-    parts.append(ball("HairSweep", (0.030, 0.026, 1.840), 0.076, H, "head",
-                      scale=(0.95, 0.85, 0.36), subsurf=1))
-    parts.append(torus("Chain", (0, 0, 1.522), 0.094, 0.008, GOLD, "chest"))
-    # ---- arms: sculpted bicep/tricep, tapered forearm, big fists ----
+            (-0.066, 1.812, 0.025), (-0.024, 1.820, 0.029),
+            (0.024, 1.818, 0.029), (0.066, 1.810, 0.025))):
+        parts.append(cube(f"HairFringe.{i}", (fx, 0.092, fz),
+                          (fw, 0.026, 0.036), H, "head", subsurf=1))
+    parts.append(ball("HairSweep", (0.028, 0.024, 1.868), 0.072, H, "head",
+                      scale=(0.95, 0.85, 0.34), subsurf=1))
+    return parts
+
+
+def build_body(S, H, HD, LIPS, SHADE, RED, WHITE, GOLD, DARK):
+    parts = []
+    # neck filler so the head sits on a column (skin stops at the neck)
+    neck = cyl("Neck", (0, 0, 1.600), 0.070, 0.14, S, "neck", subsurf=2,
+               cuts=3)
+    parts.append(profile(neck, [(0, 1.10), (0.5, 1.02), (1, 0.95)]))
+    parts += build_head(S, H, HD, LIPS, DARK)
+    parts.append(torus("Chain", (0, 0, 1.560), 0.090, 0.008, GOLD, "chest"))
+    # wrist wraps + fist wraps ride on the continuous arms
     for side, s in (("L", 1), ("R", -1)):
-        parts.append(ball(f"Delt.{side}", (s * 0.218, 0, 1.486), 0.100, S,
-                          f"upper_arm.{side}", scale=(1.0, 1.0, 1.04),
-                          subsurf=2))
-        ua = cyl(f"UpperArm.{side}", (s * 0.360, 0, 1.500), 0.088, 0.28, S,
-                 f"upper_arm.{side}", X90, subsurf=2, cuts=6)
-        parts.append(profile(ua, [(0, 0.84), (0.45, 1.10), (1, 0.94)]))
-        parts.append(sculpt(ua, [
-            ((s * 0.355, 0, 1.500), (0.095, 0.60, 0.055), 0.030,
-             (0, 1, 0), front),   # bicep
-            ((s * 0.360, 0, 1.500), (0.100, 0.60, 0.060), 0.022,
-             (0, -1, 0), back),   # tricep
-        ]))
-        parts.append(ball(f"Elbow.{side}", (s * 0.496, 0, 1.500), 0.080, S,
-                          f"forearm.{side}", subsurf=2))
-        fa = cyl(f"Forearm.{side}", (s * 0.626, 0, 1.500), 0.075, 0.25, S,
-                 f"forearm.{side}", X90, subsurf=2, cuts=6)
-        parts.append(profile(fa, [(0, 0.70), (0.35, 1.02), (1, 0.58)]))
-        parts.append(sculpt(fa, [
-            ((s * 0.560, 0, 1.500), (0.055, 0.60, 0.055), 0.020,
-             (0, 1, 0), front),   # brachioradialis
-        ]))
-        fist = ball(f"Hand.{side}", (s * 0.858, 0, 1.500), 0.096, S,
-                    f"hand.{side}", scale=(1.28, 0.86, 1.06), subsurf=2)
-        parts.append(shape_fist(fist))
-        parts.append(ball(f"Thumb.{side}", (s * 0.838, 0.062, 1.512), 0.034,
-                          S, f"hand.{side}", scale=(1.0, 1.30, 0.84),
-                          subsurf=1))
-        wf = cyl(f"WrapFist.{side}", (s * 0.858, 0, 1.500), 0.101, 0.10, RED,
-                 f"hand.{side}", X90, subsurf=1, cuts=2)
+        wf = cyl(f"WrapFist.{side}", (s * 0.845, 0, 1.490), 0.077, 0.10, RED,
+                 f"hand.{side}", (0, math.radians(90), 0), subsurf=1, cuts=2)
         parts.append(profile(wf, [(0, 0.94), (0.5, 1.0), (1, 0.94)]))
-        ww = cyl(f"WrapWrist.{side}", (s * 0.730, 0, 1.500), 0.082, 0.11, RED,
-                 f"forearm.{side}", X90, subsurf=1, cuts=3)
-        parts.append(profile(ww, [(0, 1.04), (1, 0.90)]))
-    # ---- legs: sculpted quads/calves, heavy feet ----
-    for side, s in (("L", 1), ("R", -1)):
-        parts.append(ball(f"HipJoint.{side}", (s * 0.122, 0, 1.000), 0.132, S,
-                          f"thigh.{side}", scale=(1.0, 0.96, 0.88),
-                          subsurf=2))
-        th = cyl(f"Thigh.{side}", (s * 0.120, 0, 0.780), 0.122, 0.45, S,
-                 f"thigh.{side}", subsurf=2, cuts=6)
-        parts.append(profile(th, [(0, 0.74), (0.45, 1.00), (0.82, 1.10),
-                                  (1, 0.98)]))
-        parts.append(sculpt(th, [
-            ((s * 0.120, 0, 0.790), (0.090, 0.60, 0.120), 0.026,
-             (0, 1, 0), front),   # quad
-            ((s * 0.120, 0, 0.820), (0.085, 0.60, 0.115), 0.018,
-             (0, -1, 0), back),   # hamstring
-        ]))
-        parts.append(ball(f"Knee.{side}", (s * 0.120, 0, 0.552), 0.086, S,
-                          f"shin.{side}", subsurf=2))
-        sh = cyl(f"Shin.{side}", (s * 0.120, 0, 0.335), 0.080, 0.42, S,
-                 f"shin.{side}", subsurf=2, cuts=6)
-        parts.append(profile(sh, [(0, 0.56), (0.32, 0.88), (0.60, 1.08),
-                                  (1, 0.78)]))
-        parts.append(sculpt(sh, [
-            ((s * 0.120, 0, 0.335), (0.070, 0.60, 0.115), 0.034,
-             (0, -1, 0), back),   # calf
-            ((s * 0.120, 0, 0.300), (0.060, 0.60, 0.110), 0.014,
-             (0, 1, 0), front),   # tibialis
-        ]))
-        parts.append(ball(f"Foot.{side}", (s * 0.120, 0.058, 0.052), 0.080, S,
-                          f"foot.{side}", scale=(0.82, 1.95, 0.60),
-                          subsurf=2))
-        parts.append(ball(f"Toes.{side}", (s * 0.120, 0.212, 0.036), 0.050, S,
-                          f"foot.{side}", scale=(1.00, 1.05, 0.60),
-                          subsurf=1))
-        aw = cyl(f"AnkleWrap.{side}", (s * 0.120, 0, 0.140), 0.084, 0.10,
+        ww = cyl(f"WrapWrist.{side}", (s * 0.740, 0, 1.490), 0.055, 0.10, RED,
+                 f"forearm.{side}", (0, math.radians(90), 0), subsurf=1,
+                 cuts=3)
+        parts.append(profile(ww, [(0, 1.05), (1, 0.92)]))
+        aw = cyl(f"AnkleWrap.{side}", (s * 0.115, 0, 0.150), 0.061, 0.09,
                  RED, f"shin.{side}", subsurf=1, cuts=2)
         parts.append(profile(aw, [(0, 1.04), (1, 0.90)]))
-    # ---- Muay Thai shorts: loose, high-cut, mid-thigh ----
-    # trunk must be wider than hip joints (0.254) or the thighs punch through
-    trunk = ball("ShortsTrunk", (0, 0, 1.010), 0.272, RED, "spine",
-                 scale=(1.0, 0.72, 0.60), subsurf=2)
-    parts.append(shape_axis(trunk,
-                            [(0, 0.96), (0.5, 1.0), (1.0, 0.86)],
-                            [(0, 1.00), (0.5, 1.0), (1.0, 0.84)]))
+        parts.append(ball(f"Thumb.{side}", (s * 0.830, 0.058, 1.500), 0.029,
+                          S, f"hand.{side}", scale=(1.0, 1.25, 0.82),
+                          subsurf=1))
+    # Muay Thai shorts: need to clear the glute bulge (y ~ -0.18)
+    trunk = ball("ShortsTrunk", (0, 0, 1.030), 0.276, RED, "spine",
+                 scale=(1.0, 0.80, 0.72), subsurf=2)
+    parts.append(shape_axis(trunk, [(0, 1.0), (0.5, 1.0), (1.0, 0.90)],
+                            [(0, 1.04), (0.5, 1.0), (1.0, 0.88)]))
     for side, s in (("L", 1), ("R", -1)):
-        leg = cyl(f"ShortLeg.{side}", (s * 0.130, 0, 0.855), 0.168, 0.36,
+        leg = cyl(f"ShortLeg.{side}", (s * 0.124, 0, 0.885), 0.156, 0.32,
                   RED, f"thigh.{side}", subsurf=2, cuts=4)
-        parts.append(profile(leg, [(0, 1.12), (0.45, 1.02), (1, 0.88)]))
-    # waistband hugs the trunk instead of sitting on it like a plate
-    band = ball("Waistband", (0, 0, 1.150), 0.250, WHITE, "spine",
-                scale=(1.0, 0.72, 0.075), subsurf=2)
-    parts.append(shape_axis(band, [(0, 1.0), (1, 1.0)],
-                            [(0, 1.0), (1, 1.0)]))
+        parts.append(profile(leg, [(0, 1.14), (0.45, 1.02), (1, 0.86)]))
+    band = ball("Waistband", (0, 0, 1.192), 0.250, WHITE, "spine",
+                scale=(1.0, 0.78, 0.072), subsurf=2)
+    parts.append(band)
     return parts
 
 
@@ -579,7 +756,12 @@ def build(do_dirt=False, skip_ink=False):
     GOLD = mat("Gold", (0.83, 0.62, 0.25), roughness=0.35, metallic=0.8)
     DARK = mat("Dark", (0.08, 0.06, 0.05), roughness=0.5)
     build_armature()  # must exist before finish() binds modifiers
-    parts = build_body(S, H, HD, LIPS, SHADE, RED, WHITE, GOLD, DARK)
+    arm = bpy.data.objects["FighterArmature"]
+    # one continuous body mesh (organic junctions, muscle sculpted in)
+    body = build_continuous_body(S, S)
+    bind_body(body, arm)
+    # accessories: head + features, wraps, shorts (rigid-bound)
+    parts = [body] + build_body(S, H, HD, LIPS, SHADE, RED, WHITE, GOLD, DARK)
     if do_dirt:
         # NOTE: bpy's vertex_color_dirt bakes very dark values on these
         # smooth meshes (~0.2 mean). glTF multiplies COLOR_0 into base
@@ -587,8 +769,8 @@ def build(do_dirt=False, skip_ink=False):
         # Off by default; only enable if the values are checked first.
         apply_dirt(parts)
     hulls = [] if skip_ink else build_ink(parts)
-    print(f"[build] fighter done: {len(parts)} parts + {len(hulls)} ink hulls"
-          f" + armature, {len(BONES)} bones")
+    print(f"[build] fighter done: {len(parts)} meshes"
+          f" + {len(hulls)} ink hulls + armature, {len(BONES)} bones")
     return parts, hulls
 
 
