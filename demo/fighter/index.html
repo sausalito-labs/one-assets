@@ -62,13 +62,13 @@ const err = (m) => { const e = document.getElementById('err');
 const view = document.getElementById('view');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.25;
+// no tone mapping: ACES crushed the midtones and looked unlit
+renderer.toneMapping = THREE.NoToneMapping;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 view.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x3a3a46);
+scene.background = new THREE.Color(0x4a4a58);
 const pmrem = new THREE.PMREMGenerator(renderer);
 const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 scene.environment = env;
@@ -82,16 +82,16 @@ controls.autoRotateSpeed = 1.1;
 controls.update();
 
 // bright, even arcade framing: strong front-top key, soft fill, cool rim
-const key = new THREE.DirectionalLight(0xfff4e6, 2.2);
+const key = new THREE.DirectionalLight(0xfff6ec, 2.6);
 key.position.set(3, -3.5, 4.5);
 scene.add(key);
-const fill = new THREE.DirectionalLight(0xdfe8ff, 1.1);
+const fill = new THREE.DirectionalLight(0xe6eeff, 1.5);
 fill.position.set(-3.5, -2.5, 1.5);
 scene.add(fill);
 const rim = new THREE.DirectionalLight(0xaaccff, 1.0);
 rim.position.set(-2, 4, 2.5);
 scene.add(rim);
-scene.add(new THREE.HemisphereLight(0xffffff, 0x606070, 0.9));
+scene.add(new THREE.HemisphereLight(0xffffff, 0x707078, 1.2));
 
 const grid = new THREE.GridHelper(5, 25, 0x8a8a99, 0x55555f);
 grid.rotation.x = Math.PI / 2;
@@ -116,7 +116,7 @@ new GLTFLoader().load('fighter.glb', (gltf) => {
         o.renderOrder = -1;
         inkMeshes.push(o);
       } else if (o.material) {
-        o.material.envMapIntensity = 0.55;
+        o.material.envMapIntensity = 0.45;
       }
     }
   });

@@ -567,7 +567,7 @@ def build_body(S, H, HD, LIPS, SHADE, RED, WHITE, GOLD, DARK):
     return parts
 
 
-def build(skip_dirt=False, skip_ink=False):
+def build(do_dirt=False, skip_ink=False):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     S = mat("Skin", (0.87, 0.66, 0.53), roughness=0.55, subsurface=0.25)
     H = mat("HairBleach", (0.86, 0.79, 0.60), roughness=0.85)
@@ -580,9 +580,11 @@ def build(skip_dirt=False, skip_ink=False):
     DARK = mat("Dark", (0.08, 0.06, 0.05), roughness=0.5)
     build_armature()  # must exist before finish() binds modifiers
     parts = build_body(S, H, HD, LIPS, SHADE, RED, WHITE, GOLD, DARK)
-    if skip_dirt:
-        print("[build] dirt skipped (fast mode)")
-    else:
+    if do_dirt:
+        # NOTE: bpy's vertex_color_dirt bakes very dark values on these
+        # smooth meshes (~0.2 mean). glTF multiplies COLOR_0 into base
+        # color, so exporting it makes the whole model look unlit/dark.
+        # Off by default; only enable if the values are checked first.
         apply_dirt(parts)
     hulls = [] if skip_ink else build_ink(parts)
     print(f"[build] fighter done: {len(parts)} parts + {len(hulls)} ink hulls"
@@ -595,8 +597,8 @@ def parse_args(argv):
     p.add_argument("--out", required=True)
     p.add_argument("--fbx", default=None)
     p.add_argument("--glb", default=None)
-    p.add_argument("--skip-dirt", action="store_true",
-                   help="skip baked crevice shading (fast iteration)")
+    p.add_argument("--dirt", action="store_true",
+                   help="bake crevice shading (darkens! check values first)")
     p.add_argument("--skip-ink", action="store_true",
                    help="skip ink hulls (fast iteration)")
     return p.parse_args(argv)
@@ -609,7 +611,7 @@ def main(argv):
     if bpy is None:
         raise RuntimeError("Run inside Blender: blender --background --python "
                            "scripts/build_human_tpose.py")
-    build(skip_dirt=args.skip_dirt, skip_ink=args.skip_ink)
+    build(do_dirt=args.dirt, skip_ink=args.skip_ink)
     parts = [o for o in bpy.data.objects if o.type == "MESH"
              and not o.name.startswith("Ink_")]
     hulls = [o for o in bpy.data.objects if o.type == "MESH"
@@ -624,11 +626,11 @@ def main(argv):
         print(f"[build] exported {args.fbx}")
     if args.glb:
         # web export: ink included, viewer renders it BackSide.
-        # ACTIVE forces the Dirt color attribute out as COLOR_0.
+        # do NOT force vertex colors - a dark baked attribute multiplies
+        # into base color and makes the whole model look unlit.
         select_for_export(parts, hulls, with_ink=True)
         bpy.ops.export_scene.gltf(filepath=args.glb, export_format="GLB",
-                                  use_selection=True,
-                                  export_vertex_color="ACTIVE")
+                                  use_selection=True)
         print(f"[build] exported {args.glb}")
 
 
